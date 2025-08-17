@@ -1,0 +1,8 @@
+PyQt6>=6.4.0
+pulsectl>=22.3.2
+
+[dev]
+pytest
+black
+flake8
+mypy

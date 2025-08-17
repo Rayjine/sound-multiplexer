@@ -18,11 +18,31 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+import sys
+import os
+
+from PyQt6.QtWidgets import QApplication
+from .audio_manager import AudioManager
+from .gui.main_window import MainWindow
+
+
+def main():
+    try:
+        app = QApplication(sys.argv)
+        app.setApplicationName("Sound Multiplexer")
+        app.setApplicationVersion("1.0.0")
+        
+        audio_manager = AudioManager()
+        window = MainWindow(audio_manager)
+        window.show()
+        
+        sys.exit(app.exec())
+    except Exception as e:
+        print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    # Direct execution - add src to path and run
-    import sys
-    import os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-    
-    from main import main
     main()

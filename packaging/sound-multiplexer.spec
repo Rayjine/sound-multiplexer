@@ -16,7 +16,7 @@ BuildRequires:  desktop-file-utils
 Requires:       python3
 Requires:       python3-PyQt6
 Requires:       python3-pulsectl
-Requires:       pulseaudio
+Requires:       (pulseaudio or pipewire-pulseaudio)
 Requires:       pulseaudio-utils
 
 %description

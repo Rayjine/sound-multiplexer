@@ -1,3 +1,44 @@
+Metadata-Version: 2.4
+Name: sound-multiplexer
+Version: 1.0.0
+Summary: A GUI application for multiplexing audio output to multiple devices simultaneously
+Home-page: https://github.com/rayjine/sound-multiplexer
+Author: Sound Multiplexer Contributors
+Author-email: 
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Multimedia :: Sound/Audio
+Classifier: Topic :: Desktop Environment
+Classifier: Environment :: X11 Applications :: Qt
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: PyQt6>=6.4.0
+Requires-Dist: pulsectl>=22.3.2
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: flake8; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Dynamic: author
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
 # 🎵 Sound Multiplexer
 
 A modern Linux audio multiplexer with GUI interface that allows you to play audio simultaneously through multiple output devices with advanced synchronization and theming capabilities.

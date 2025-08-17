@@ -53,10 +53,10 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "sound-multiplexer=main:main",
+            "sound-multiplexer=src.main:main",
         ],
         "gui_scripts": [
-            "sound-multiplexer-gui=main:main",
+            "sound-multiplexer-gui=src.main:main",
         ],
     },
     data_files=[

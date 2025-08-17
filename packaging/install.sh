@@ -48,6 +48,15 @@ detect_distro() {
     fi
 }
 
+# Check if PipeWire is already installed
+check_pipewire() {
+    if rpm -q pipewire-pulseaudio &> /dev/null; then
+        return 0  # PipeWire is installed
+    else
+        return 1  # PipeWire not installed
+    fi
+}
+
 # Install dependencies based on distribution
 install_dependencies() {
     local distro=$(detect_distro)
@@ -56,7 +65,14 @@ install_dependencies() {
     case $distro in
         "fedora")
             log_info "Installing dependencies with dnf..."
-            sudo dnf install -y python3 python3-pip python3-PyQt6 pulseaudio pulseaudio-utils
+            # Check if PipeWire is already installed (modern Fedora default)
+            if check_pipewire; then
+                log_info "PipeWire already installed (modern audio system)"
+                sudo dnf install -y python3 python3-pip python3-PyQt6 pulseaudio-utils
+            else
+                log_info "Installing PipeWire with PulseAudio compatibility"
+                sudo dnf install -y python3 python3-pip python3-PyQt6 pipewire-pulseaudio pulseaudio-utils
+            fi
             ;;
         "rhel")
             log_info "Installing dependencies with yum..."
