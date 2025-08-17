@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="24" cy="24" r="22" fill="#2196F3" stroke="#1976D2" stroke-width="2"/>
+  
+  <!-- Speaker/multiplexer icon -->
+  <g fill="white">
+    <!-- Main speaker cone -->
+    <path d="M16 18 L16 30 L20 30 L26 36 L26 12 L20 18 Z"/>
+    
+    <!-- Sound waves -->
+    <path d="M30 20 Q34 22 34 24 Q34 26 30 28" stroke="white" stroke-width="2" fill="none"/>
+    <path d="M32 16 Q38 19 38 24 Q38 29 32 32" stroke="white" stroke-width="2" fill="none"/>
+    
+    <!-- Multiplexer dots -->
+    <circle cx="40" cy="18" r="2"/>
+    <circle cx="40" cy="24" r="2"/>
+    <circle cx="40" cy="30" r="2"/>
+  </g>
+</svg>

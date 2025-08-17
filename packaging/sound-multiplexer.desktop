@@ -1,0 +1,18 @@
+[Desktop Entry]
+Name=Sound Multiplexer
+Comment=Multiplex audio output to multiple devices simultaneously
+GenericName=Audio Multiplexer
+Exec=sound-multiplexer-gui
+Icon=sound-multiplexer
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Mixer;
+Keywords=audio;sound;multiplexer;output;devices;pulseaudio;
+StartupNotify=true
+StartupWMClass=Sound Multiplexer
+MimeType=
+Actions=
+
+[Desktop Action Settings]
+Name=Settings
+Exec=sound-multiplexer-gui --settings

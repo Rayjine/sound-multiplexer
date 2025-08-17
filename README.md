@@ -43,7 +43,7 @@ A modern Linux audio multiplexer with GUI interface that allows you to play audi
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/sound-multiplexer.git
+git clone https://github.com/rayjine/sound-multiplexer.git
 cd sound-multiplexer
 
 # Install dependencies
@@ -210,6 +210,125 @@ Application logs PulseAudio operations to console:
 - Device detection events
 - Sync compensation calculations
 
+## 📦 Installation & Packaging
+
+### Package Installation
+
+#### Automated Installation
+Use the provided installation script for automatic dependency installation:
+```bash
+# Clone the repository
+git clone https://github.com/rayjine/sound-multiplexer.git
+cd sound-multiplexer
+
+# Run installation script
+./packaging/install.sh
+```
+
+#### Manual Installation
+For manual installation with more control:
+
+**Fedora/RHEL/CentOS:**
+```bash
+# Install dependencies
+sudo dnf install python3 python3-pip python3-PyQt6 pulseaudio pulseaudio-utils
+
+# Install Sound Multiplexer
+pip3 install --user pulsectl
+make install-user
+```
+
+**Ubuntu/Debian:**
+```bash
+# Install dependencies  
+sudo apt update
+sudo apt install python3 python3-pip python3-pyqt6 pulseaudio pulseaudio-utils
+
+# Install Sound Multiplexer
+pip3 install --user pulsectl
+make install-user
+```
+
+**Arch Linux:**
+```bash
+# Install dependencies
+sudo pacman -S python python-pip python-pyqt6 pulseaudio
+
+# Install Sound Multiplexer
+pip3 install --user pulsectl
+make install-user
+```
+
+### Building Packages
+
+#### RPM Package (Fedora/RHEL/openSUSE)
+```bash
+# Install build dependencies
+sudo dnf install rpm-build rpmbuild
+
+# Build RPM
+make rpm
+
+# Install the built package
+sudo dnf install packaging/rpmbuild/RPMS/noarch/sound-multiplexer-*.rpm
+```
+
+#### DEB Package (Debian/Ubuntu)
+```bash
+# Install build dependencies
+sudo apt install devscripts debhelper dh-make
+
+# Build DEB
+make deb
+
+# Install the built package
+sudo dpkg -i packaging/debian/sound-multiplexer_*.deb
+```
+
+#### Python Package (pip)
+```bash
+# Build wheel
+make build
+
+# Install locally
+pip3 install --user dist/sound-multiplexer-*.whl
+```
+
+### Distribution Maintainers
+
+To include Sound Multiplexer in your distribution:
+
+1. **Dependencies:**
+   - Python 3.8+
+   - PyQt6
+   - PulseAudio
+   - python3-pulsectl (pip installable)
+
+2. **Build files provided:**
+   - `setup.py` - Standard Python packaging
+   - `packaging/sound-multiplexer.spec` - RPM spec file
+   - `packaging/sound-multiplexer.desktop` - Desktop entry
+   - `Makefile` - Build automation
+
+3. **Installation paths:**
+   - Binary: `/usr/bin/sound-multiplexer`
+   - Desktop file: `/usr/share/applications/`
+   - Icon: `/usr/share/pixmaps/`
+   - Documentation: `/usr/share/doc/sound-multiplexer/`
+
+### Development Installation
+```bash
+# Clone and install in development mode
+git clone https://github.com/rayjine/sound-multiplexer.git
+cd sound-multiplexer
+
+# Install dependencies
+make deps dev-deps
+
+# Install in development mode (editable)
+make dev-install
+```
+
 ## 🤝 Contributing
 
 ### Development Setup
@@ -226,7 +345,7 @@ Application logs PulseAudio operations to console:
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
