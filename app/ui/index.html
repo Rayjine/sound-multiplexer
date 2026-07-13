@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sound Multiplexer</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app" id="app" data-empty="false">
+
+  <!-- header -->
+  <header class="titlebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <rect x="2.5" y="6" width="2" height="8" rx="1"/>
+          <rect x="7"   y="2" width="2" height="12" rx="1"/>
+          <rect x="11.5" y="4" width="2" height="10" rx="1"/>
+        </svg>
+      </span>
+      <h1>Sound Multiplexer</h1>
+    </div>
+    <button class="icon-btn theme-btn" id="themeToggle" title="Theme (cycles System / Light / Dark)">
+      <svg id="themeIconSystem" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none"/>
+      </svg>
+      <svg id="themeIconLight" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="display:none">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>
+      </svg>
+      <svg id="themeIconDark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="display:none">
+        <path d="M20.5 13.5A8.5 8.5 0 1 1 10.5 3.5a7 7 0 0 0 10 10z"/>
+      </svg>
+      <span class="theme-label" id="themeLabel">System</span>
+    </button>
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings" title="Settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <circle cx="12" cy="12" r="3.2"/>
+        <path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1"/>
+      </svg>
+    </button>
+  </header>
+
+  <!-- toolbar -->
+  <div class="toolbar">
+    <button class="tool-btn" id="refreshBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 3.5V8h-4.5"/>
+      </svg>
+      Refresh
+    </button>
+    <span class="spacer"></span>
+    <button class="tool-btn bulk" id="selectAllBtn">Select all</button>
+    <button class="tool-btn bulk" id="deselectAllBtn">Deselect all</button>
+  </div>
+
+  <!-- device list (rows rendered by main.js) -->
+  <div class="device-scroll">
+    <ul class="device-list" id="deviceList"></ul>
+  </div>
+
+  <!-- empty state -->
+  <div class="empty-state">
+    <span class="empty-icon" aria-hidden="true">
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z" stroke-linejoin="round"/>
+        <path d="M16 10.5l4 4M20 10.5l-4 4"/>
+      </svg>
+    </span>
+    <h2>No output devices found</h2>
+    <p>Check that your audio server (PulseAudio or PipeWire) is running, then refresh the device list.</p>
+    <button class="tool-btn" id="emptyRefreshBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 3.5V8h-4.5"/>
+      </svg>
+      Refresh
+    </button>
+  </div>
+
+  <!-- status bar -->
+  <footer class="statusbar" id="statusbar" data-state="error" role="status">
+    <span class="status-icon" aria-hidden="true">
+      <svg class="i-active" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="currentColor"/></svg>
+      <svg class="i-silent" width="14" height="14" viewBox="0 0 14 14"><path d="M7 1.5L13 12H1z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 5.5v3M7 10.2v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <svg class="i-error" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.8 4.8l4.4 4.4M9.2 4.8L4.8 9.2" stroke="currentColor" stroke-width="1.5"/></svg>
+    </span>
+    <span id="statusText">Loading…</span>
+  </footer>
+</div>
+
+<!-- settings dialog -->
+<dialog class="settings" id="settingsDialog">
+  <div class="settings-head">
+    <h2>Settings</h2>
+    <button class="icon-btn" id="settingsCloseX" aria-label="Close settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="settings-body">
+    <div>
+      <p class="setting-label">Theme</p>
+      <div class="seg" role="radiogroup" aria-label="Theme">
+        <input type="radio" name="theme" id="themeSystem" value="system" checked>
+        <label for="themeSystem">System</label>
+        <input type="radio" name="theme" id="themeLight" value="light">
+        <label for="themeLight">Light</label>
+        <input type="radio" name="theme" id="themeDark" value="dark">
+        <label for="themeDark">Dark</label>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-text">
+        <span class="setting-title">Audio sync compensation <span class="chip-exp">Experimental</span></span>
+        <p class="setting-desc">Delays faster wired outputs to stay in sync with slower devices like Bluetooth. Not implemented yet — this setting has no effect.</p>
+      </div>
+      <button class="switch" role="switch" aria-checked="false" id="syncSwitch" aria-label="Audio sync compensation"></button>
+    </div>
+  </div>
+  <div class="settings-foot">
+    <button class="btn-primary" id="settingsClose">Done</button>
+  </div>
+</dialog>
+
+<!-- device row template; icon + name + state filled by main.js -->
+<template id="deviceRowTemplate">
+  <li class="device" data-enabled="false" data-muted="false">
+    <span class="dev-icon" aria-hidden="true"></span>
+    <div class="dev-main">
+      <h3 class="dev-name"></h3>
+      <div class="dev-volume">
+        <button class="mute-btn" aria-pressed="false">
+          <svg class="icon-unmuted" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z" fill="currentColor" stroke-linejoin="round"/>
+            <path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/>
+          </svg>
+          <svg class="icon-muted" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z" fill="currentColor" stroke-linejoin="round"/>
+            <path d="M15.5 9.5l5 5M20.5 9.5l-5 5"/>
+          </svg>
+        </button>
+        <input type="range" min="0" max="100" value="0">
+        <output class="pct">0%</output>
+        <span class="muted-chip">Muted</span>
+      </div>
+    </div>
+    <button class="switch" role="switch" aria-checked="false"></button>
+  </li>
+</template>
+
+<script src="main.js"></script>
+</body>
+</html>

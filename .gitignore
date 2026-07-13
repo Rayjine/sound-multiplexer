@@ -11,6 +11,10 @@ venv/
 packaging/rpmbuild/
 packaging/debian/
 
+# Rust / Tauri (app/)
+app/target/
+app/src-tauri/gen/schemas/
+
 # Tooling caches
 .mypy_cache/
 .pytest_cache/
