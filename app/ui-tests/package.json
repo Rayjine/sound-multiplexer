@@ -1,0 +1,13 @@
+{
+  "name": "sound-multiplexer-ui-tests",
+  "private": true,
+  "version": "0.1.0",
+  "description": "DOM-level tests for the Sound Multiplexer UI: the real index.html + main.js running inside jsdom",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}
