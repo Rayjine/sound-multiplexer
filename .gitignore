@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+venv/
+.venv/
+
+# Package build output
+packaging/rpmbuild/
+packaging/debian/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+docs/design-brief.md
+CLAUDE.md

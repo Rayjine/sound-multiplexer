@@ -1,5 +1,0 @@
-[console_scripts]
-sound-multiplexer = src.main:main
-
-[gui_scripts]
-sound-multiplexer-gui = src.main:main
