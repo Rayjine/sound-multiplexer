@@ -19,10 +19,5 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 if __name__ == "__main__":
-    # Direct execution - add src to path and run
-    import sys
-    import os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-    
-    from main import main
+    from src.main import main
     main()
