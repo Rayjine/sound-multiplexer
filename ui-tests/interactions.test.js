@@ -3,7 +3,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadApp, settle, rows, rowById } from './helpers/harness.js';
+import { loadApp, settle, rows, rowById, device, makeFakeTauri } from './helpers/harness.js';
 
 test('switch click optimistically flips data-enabled and the status count', async (t) => {
   const window = loadApp(t);
@@ -160,4 +160,40 @@ test('the toolbar has no refresh button; the empty state keeps one', async (t) =
   await settle();
   assert.equal(window.document.getElementById('refreshBtn'), null);
   assert.notEqual(window.document.getElementById('emptyRefreshBtn'), null);
+});
+
+test('a stale snapshot arriving just after a drag ends must not clobber the slider', async (t) => {
+  // The race this guards (seen on the Windows backend, where the app's own
+  // volume writes are echo-suppressed so no corrective event ever follows):
+  // the backend reads device volumes mid-drag, but the snapshot reaches the
+  // UI just after mouseup cleared draggingId — without the post-drag grace
+  // window the slider would snap back to the mid-drag value forever.
+  const fake = makeFakeTauri({
+    get_devices: () => [device('dev.a', { enabled: true, volume: 0.4 })],
+    set_device_volume: () => null,
+  });
+  const window = loadApp(t, { tauri: fake.tauri });
+  await settle();
+  const li = rowById(window.document, 'dev.a');
+  const slider = li.querySelector('input[type="range"]');
+
+  // Drag to 90 and release.
+  slider.value = '90';
+  slider.dispatchEvent(new window.Event('input', { bubbles: true }));
+  slider.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  // A snapshot carrying the mid-drag value lands after the drag ended.
+  fake.emit('devices-changed', [device('dev.a', { enabled: true, volume: 0.62 })]);
+  assert.equal(slider.value, '90', 'slider must keep the drag-end value');
+  assert.equal(li.querySelector('.pct').value, '90%');
+
+  // Snapshots for OTHER rows (and later, post-grace ones) still apply: the
+  // guard is per-device and time-bounded, not a global freeze.
+  fake.emit('devices-changed', [
+    device('dev.a', { enabled: true, volume: 0.62 }),
+    device('dev.b', { enabled: true, volume: 0.3 }),
+  ]);
+  const other = rowById(window.document, 'dev.b');
+  assert.equal(other.querySelector('input[type="range"]').value, '30');
+  assert.equal(slider.value, '90', 'grace window still shields the dragged row');
 });

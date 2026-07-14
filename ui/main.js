@@ -120,7 +120,15 @@
   var devices = [];          // last known full state
   var rows = new Map();      // device id -> <li> element
   var draggingId = null;     // device whose slider is being dragged
+  var volumeTouched = new Map(); // device id -> ts of last local volume write
   var WHEEL_STEP = 5;        // % per wheel notch when scrolling on a row
+  /* Snapshots listing a device's volume can be read mid-drag but delivered
+     after the drag ended (draggingId already cleared); nothing corrects the
+     stale value afterwards, because the backend suppresses the echo of our
+     own final write. Ignore snapshot volumes for a device this long after
+     the last local write — long enough for an in-flight snapshot (80ms pump
+     coalescing + list + emit), short enough for real external changes. */
+  var VOLUME_ECHO_GRACE_MS = 600;
 
   function updateStatus() {
     app.dataset.empty = String(realDevices().length === 0);
@@ -176,6 +184,7 @@
     // input = live drag: update locally, push over IPC at most every 80ms.
     // change = drag end: clear the guard and push the final value unthrottled.
     var pushVolume = throttle(function (value) {
+      volumeTouched.set(d.id, Date.now());
       api.setVolume(d.id, value / 100).catch(surfaceError);
     }, 80);
     var wheelEndTimer = null;
@@ -195,6 +204,7 @@
       clearTimeout(wheelEndTimer);
       wheelEndTimer = null;
       draggingId = null;
+      volumeTouched.set(d.id, Date.now());
       api.setVolume(d.id, Number(slider.value) / 100).catch(surfaceError);
     });
 
@@ -237,6 +247,7 @@
         wheelEndTimer = null;
         if (draggingId === d.id) draggingId = null;
         if (!findDevice(d.id)) return; // device vanished mid-wheel
+        volumeTouched.set(d.id, Date.now());
         api.setVolume(d.id, Number(slider.value) / 100).catch(surfaceError);
       }, 250);
     }, { passive: false });
@@ -270,7 +281,8 @@
     var slider = li.querySelector('input[type="range"]');
     slider.disabled = false;
     slider.setAttribute('aria-label', 'Volume for ' + d.name);
-    if (draggingId !== d.id) {
+    var touched = volumeTouched.get(d.id) || 0;
+    if (draggingId !== d.id && Date.now() - touched >= VOLUME_ECHO_GRACE_MS) {
       var pct = volumePct(d);
       slider.value = pct;
       slider.style.setProperty('--val', pct);
