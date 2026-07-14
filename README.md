@@ -2,11 +2,13 @@
 
 Play audio through several output devices at once — speakers, headphones and Bluetooth in any combination.
 
+[Website](https://rayjine.github.io/sound-multiplexer/) · [Downloads](https://github.com/Rayjine/sound-multiplexer/releases/latest)
+
 Select the devices you want sound on; the app builds a combined PulseAudio/PipeWire sink and makes it the default. Each device keeps its own volume and mute, a master row controls the combined output as a whole, and everything stays in sync with the system mixer both ways.
 
 ## Status
 
-Version 2 is a full rewrite in Rust with a Tauri UI, replacing the original Python/PyQt6 app. Linux is tested, including a live end-to-end suite that drives a real PipeWire server. A Windows backend (WASAPI loopback fan-out) is implemented and compiles, but hasn't run on real hardware yet. Installers aren't published yet — build from source below.
+Version 2 is a full rewrite in Rust with a Tauri UI, replacing the original Python/PyQt6 app. Linux is tested, including a live end-to-end suite that drives a real PipeWire server. The Windows build (WASAPI loopback fan-out) passes its tests in CI but hasn't run on real hardware yet. Installers for both — AppImage, deb, rpm and a Windows setup — are on the [releases page](https://github.com/Rayjine/sound-multiplexer/releases), or build from source below.
 
 ## Build from source
 
