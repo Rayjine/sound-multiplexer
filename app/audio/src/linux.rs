@@ -198,18 +198,23 @@ impl LinuxBackend {
 
 impl AudioBackend for LinuxBackend {
     fn list_devices(&mut self) -> anyhow::Result<Vec<Device>> {
-        let devices = list_sinks()?
-            .into_iter()
-            .filter(|s| !is_ours(&s.name))
-            .map(|s| Device {
-                enabled: self.enabled.contains(&s.name),
-                id: s.name,
-                name: s.description,
-                device_type: s.device_type,
-                volume: s.volume,
-                muted: s.muted,
-            })
-            .collect();
+        let sinks = list_sinks()?;
+        let mut devices = Vec::with_capacity(sinks.len());
+        // The combine sink leads the list as the synthetic master row.
+        devices.extend(master_device(self.combine_module, &sinks));
+        devices.extend(
+            sinks
+                .into_iter()
+                .filter(|s| !is_ours(&s.name))
+                .map(|s| Device {
+                    enabled: self.enabled.contains(&s.name),
+                    id: s.name,
+                    name: s.description,
+                    device_type: s.device_type,
+                    volume: s.volume,
+                    muted: s.muted,
+                }),
+        );
         Ok(devices)
     }
 
@@ -284,6 +289,16 @@ impl AudioBackend for LinuxBackend {
                     return Ok(());
                 }
 
+                // A fresh combine sink comes up at full volume; carry the
+                // current master volume/mute over so a device toggle never
+                // audibly jumps the overall level mid-session.
+                let master_state = self.combine_module.and_then(|id| {
+                    sinks
+                        .iter()
+                        .find(|s| s.owner_module == Some(u64::from(id)))
+                        .map(|s| (s.volume, s.muted))
+                });
+
                 let slaves = many.join(",");
                 let sink_name_arg = format!("sink_name={COMBINED_SINK}");
                 let slaves_arg = format!("slaves={slaves}");
@@ -352,6 +367,22 @@ impl AudioBackend for LinuxBackend {
                     }
                 }
                 self.combine_module = Some(new_id);
+                // The old combine is gone, so the name is unique again and
+                // volume/mute restoration by name hits the replacement.
+                // Best-effort: a failure here must not fail the routing.
+                if let Some((volume, muted)) = master_state {
+                    let percent = (volume.clamp(0.0, 1.0) * 100.0).round() as u32;
+                    if let Err(e) =
+                        run_pactl(&["set-sink-volume", COMBINED_SINK, &format!("{percent}%")])
+                    {
+                        warn!("could not carry master volume over: {e:#}");
+                    }
+                    if muted {
+                        if let Err(e) = run_pactl(&["set-sink-mute", COMBINED_SINK, "1"]) {
+                            warn!("could not carry master mute over: {e:#}");
+                        }
+                    }
+                }
                 if let Err(e) = set_default_sink(COMBINED_SINK) {
                     // The combine over the new set exists and is tracked; only
                     // the default move failed. Record the new set so tracked
@@ -569,6 +600,27 @@ fn is_ours(sink_name: &str) -> bool {
     sink_name.starts_with(OUR_PREFIX)
 }
 
+/// The live combine sink as the synthetic "Master volume" device, present
+/// only while 2+ devices are routed through it. Matched by owner module —
+/// sink names are not unique on pipewire-pulse, module ids are. Volume and
+/// mute are real (the sink's own), and apply upstream of every slave; this
+/// is also exactly what the system volume UI controls while the combine
+/// sink is the default.
+fn master_device(combine_module: Option<u32>, sinks: &[Sink]) -> Option<Device> {
+    let module = combine_module?;
+    let sink = sinks
+        .iter()
+        .find(|s| s.owner_module == Some(u64::from(module)))?;
+    Some(Device {
+        id: sink.name.clone(),
+        name: "Master volume".to_string(),
+        device_type: DeviceType::Master,
+        enabled: true,
+        volume: sink.volume,
+        muted: sink.muted,
+    })
+}
+
 fn parse_module_id(load_module_stdout: &str) -> anyhow::Result<u32> {
     load_module_stdout
         .trim()
@@ -743,8 +795,10 @@ fn infer_device_type(
 // ---------------------------------------------------------------------------
 
 /// Cached view the monitor thread diffs against: per-sink volume/mute of the
-/// real sinks, plus the default sink name (so external routing changes
-/// surface as DevicesChanged).
+/// real sinks plus our combine sink (the master row tracks external master
+/// changes, e.g. the system volume UI while the combine sink is default),
+/// plus the default sink name (so external routing changes surface as
+/// DevicesChanged).
 struct Snapshot {
     state: HashMap<String, (f32, bool)>,
     default_sink: String,
@@ -756,7 +810,7 @@ fn take_snapshot() -> anyhow::Result<Snapshot> {
     Ok(Snapshot {
         state: sinks
             .into_iter()
-            .filter(|s| !is_ours(&s.name))
+            .filter(|s| !is_ours(&s.name) || s.name == COMBINED_SINK)
             .map(|s| (s.name, (s.volume, s.muted)))
             .collect(),
         default_sink,
@@ -980,6 +1034,25 @@ mod tests {
         assert!(parse_sinks(r#"[{"name": "x", "descr"#).is_err());
         // A sink entry without the required fields.
         assert!(parse_sinks(r#"[{"index": 67}]"#).is_err());
+    }
+
+    #[test]
+    fn master_row_appears_only_for_the_tracked_live_combine() {
+        let sinks = parse_sinks(SINKS_JSON).unwrap();
+
+        // Tracked module with a live sink -> master row with real state.
+        let master = master_device(Some(536870916), &sinks).unwrap();
+        assert_eq!(master.id, COMBINED_SINK);
+        assert_eq!(master.device_type, DeviceType::Master);
+        assert_eq!(master.name, "Master volume");
+        assert!(master.enabled);
+        assert!(!master.muted);
+        assert_eq!(master.volume, 1.0);
+
+        // No tracked module (0/1-device routing) -> no master row.
+        assert!(master_device(None, &sinks).is_none());
+        // Tracked module whose sink is gone (mid-rebuild) -> no master row.
+        assert!(master_device(Some(999), &sinks).is_none());
     }
 
     #[test]

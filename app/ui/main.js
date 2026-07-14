@@ -67,6 +67,8 @@
     hdmi: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M12 17v3.5M8 20.5h8"/></svg>',
     usb: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v13"/><path d="M12 5l-2 2.6M12 5l2 2.6" stroke-linecap="round"/><path d="M12 12.5L7.5 10M12 15l4.5-2.5"/><circle cx="7" cy="9" r="1.6"/><rect x="15" y="10" width="3.2" height="3.2"/><circle cx="12" cy="19.5" r="1.8" fill="currentColor" stroke="none"/></svg>',
     digital: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/><path d="M12 4v2.2"/></svg>',
+    // The app's own brand mark: the master row is the combined output itself.
+    master: '<svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><rect x="2.5" y="6" width="2" height="8" rx="1"/><rect x="7" y="2" width="2" height="12" rx="1"/><rect x="11.5" y="4" width="2" height="10" rx="1"/></svg>',
   };
   var TYPE_LABELS = {
     speakers: 'Speakers',
@@ -75,6 +77,7 @@
     hdmi: 'HDMI / display audio',
     usb: 'USB audio',
     digital: 'Digital / optical',
+    master: 'Combined output — controls all enabled devices at once',
   };
 
   /* ================= state & rendering ================= */
@@ -89,17 +92,17 @@
   var draggingId = null;     // device whose slider is being dragged
 
   function updateStatus() {
-    app.dataset.empty = String(devices.length === 0);
+    app.dataset.empty = String(realDevices().length === 0);
     // An active error flash owns the status bar until its timer restores it;
     // without this, the revert-path refetch would repaint the derived status
     // over the error before the user could read it.
     if (errorFlashTimer) return;
-    if (devices.length === 0) {
+    if (realDevices().length === 0) {
       statusbar.dataset.state = 'error';
       statusText.textContent = 'No output devices found';
       return;
     }
-    var n = devices.filter(function (d) { return d.enabled; }).length;
+    var n = realDevices().filter(function (d) { return d.enabled; }).length;
     if (n === 0) {
       statusbar.dataset.state = 'silent';
       statusText.textContent = 'Silent mode — no devices selected';
@@ -111,6 +114,11 @@
 
   function volumePct(d) {
     return Math.round(d.volume * 100);
+  }
+
+  /* The master row is the routing itself, not a selectable device. */
+  function realDevices() {
+    return devices.filter(function (d) { return d.deviceType !== 'master'; });
   }
 
   function createRow(d) {
@@ -156,6 +164,7 @@
   function updateRow(li, d) {
     li.dataset.enabled = String(d.enabled);
     li.dataset.muted = String(d.muted);
+    li.dataset.master = String(d.deviceType === 'master');
 
     var icon = li.querySelector('.dev-icon');
     icon.title = TYPE_LABELS[d.deviceType] || '';
@@ -171,10 +180,12 @@
     var mute = li.querySelector('.mute-btn');
     mute.setAttribute('aria-pressed', String(d.muted));
     mute.setAttribute('aria-label', (d.muted ? 'Unmute ' : 'Mute ') + d.name);
-    mute.disabled = !d.enabled;
+    mute.disabled = false;
 
+    // Volume is adjustable regardless of enabled/muted state: it changes
+    // the device's stored level without touching routing or mute.
     var slider = li.querySelector('input[type="range"]');
-    slider.disabled = !d.enabled || d.muted;
+    slider.disabled = false;
     slider.setAttribute('aria-label', 'Volume for ' + d.name);
     if (draggingId !== d.id) {
       var pct = volumePct(d);

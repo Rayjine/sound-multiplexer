@@ -45,7 +45,7 @@ test('status wording: singular count, then silent mode when nothing is enabled',
   assert.equal(statusText.textContent, 'Silent mode — no devices selected');
 });
 
-test('mute click shows muted hooks (data-muted, chip, aria) and disables the slider', async (t) => {
+test('mute click shows muted hooks (data-muted, chip, aria) and keeps the slider interactive', async (t) => {
   const window = loadApp(t);
   await settle();
   const li = rowById(window.document, 'mock.analog');
@@ -60,7 +60,7 @@ test('mute click shows muted hooks (data-muted, chip, aria) and disables the sli
   assert.equal(mute.getAttribute('aria-pressed'), 'true');
   assert.equal(mute.getAttribute('aria-label'), 'Unmute Built-in Audio Analog Stereo');
   assert.equal(li.querySelector('.muted-chip').textContent, 'Muted');
-  assert.equal(slider.disabled, true);
+  assert.equal(slider.disabled, false, 'muted row keeps an interactive slider');
   assert.equal(mute.disabled, false, 'mute stays clickable so the user can unmute');
   await settle();
   assert.equal(li.dataset.muted, 'true');

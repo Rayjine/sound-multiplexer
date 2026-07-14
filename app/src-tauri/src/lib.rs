@@ -2,7 +2,7 @@ use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use sound_multiplexer_audio::{
-    compute_enabled_ids, create_backend, AudioBackend, BackendEvent, Device,
+    compute_enabled_ids, create_backend, AudioBackend, BackendEvent, Device, DeviceType,
 };
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
@@ -89,7 +89,13 @@ fn set_all_enabled_inner(
 ) -> CmdResult<()> {
     let result = with_backend(backend, |b| {
         let ids: Vec<String> = if enabled {
-            b.list_devices()?.iter().map(|d| d.id.clone()).collect()
+            // "Select all" means all real devices; the master row is the
+            // routing itself, never a member of the enabled set.
+            b.list_devices()?
+                .iter()
+                .filter(|d| d.device_type != DeviceType::Master)
+                .map(|d| d.id.clone())
+                .collect()
         } else {
             Vec::new()
         };

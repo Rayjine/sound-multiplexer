@@ -11,12 +11,14 @@
 //! running app instance may own it) the test SKIPS instead of fighting over
 //! the routing. When fewer than two real sinks exist, a helper
 //! `module-null-sink` (named OUTSIDE the app's prefix, so the backend treats
-//! it as a real device) provides the second device the combine path needs.
+//! it as a real device) provides the second device the combine path needs;
+//! a second helper sink is always loaded mid-test to force a combine REBUILD
+//! for the master-volume preservation check.
 
 #![cfg(target_os = "linux")]
 
 use sound_multiplexer_audio::linux::LinuxBackend;
-use sound_multiplexer_audio::{AudioBackend, BackendEvent};
+use sound_multiplexer_audio::{AudioBackend, BackendEvent, DeviceType};
 use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -26,6 +28,9 @@ const COMBINED_SINK: &str = "sound_multiplexer_combined";
 const NULL_SINK: &str = "sound_multiplexer_null";
 /// Helper second device; deliberately NOT under the app's prefix.
 const AUX_SINK: &str = "smx_livetest_aux";
+/// Helper third device, loaded mid-test to force a combine-sink REBUILD
+/// (a genuinely different 2+ set) for the master-volume preservation check.
+const AUX2_SINK: &str = "smx_livetest_aux2";
 
 /// PipeWire applies routing asynchronously; poll this long after a change.
 const APPLY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -128,6 +133,21 @@ fn find_json_sink(name: &str) -> Option<serde_json::Value> {
         .cloned()
 }
 
+/// Like [`find_json_sink`], but matched by owning module id: during a combine
+/// rebuild two same-named sinks can briefly coexist (pipewire-pulse allows
+/// it), and only the module id disambiguates the replacement from the corpse.
+fn find_json_sink_by_owner(module_id: u32) -> Option<serde_json::Value> {
+    let sinks: serde_json::Value =
+        serde_json::from_str(&pactl(&["-f", "json", "list", "sinks"]))
+            .expect("unparseable `pactl -f json list sinks` output");
+    sinks
+        .as_array()
+        .expect("sink listing is not a JSON array")
+        .iter()
+        .find(|s| s["owner_module"].as_u64() == Some(u64::from(module_id)))
+        .cloned()
+}
+
 /// Per-channel `value_percent` strings of a sink, from the JSON listing.
 fn json_channel_percents(sink: &serde_json::Value) -> Vec<String> {
     sink["volume"]
@@ -179,8 +199,8 @@ struct SinkState {
 struct AudioStateGuard {
     default_sink: String,
     sinks: Vec<SinkState>,
-    /// Helper second-device module to unload, if the test loaded one.
-    aux_module: Option<u32>,
+    /// Helper-device modules (aux/aux2) to unload, if the test loaded any.
+    aux_modules: Vec<u32>,
 }
 
 impl AudioStateGuard {
@@ -195,7 +215,7 @@ impl AudioStateGuard {
                     name,
                 })
                 .collect(),
-            aux_module: None,
+            aux_modules: Vec::new(),
         }
     }
 }
@@ -212,7 +232,7 @@ impl Drop for AudioStateGuard {
                 pactl_lenient(&["unload-module", &id.to_string()]);
             }
         }
-        if let Some(id) = self.aux_module {
+        for id in &self.aux_modules {
             pactl_lenient(&["unload-module", &id.to_string()]);
         }
         for sink in &self.sinks {
@@ -231,6 +251,26 @@ impl Drop for AudioStateGuard {
 // ---------------------------------------------------------------------------
 // Waiting helpers
 // ---------------------------------------------------------------------------
+
+/// Load a helper `module-null-sink` named OUTSIDE the app's prefix (the
+/// backend treats it as a real device) and wait until it is enumerable.
+/// Returns the module id; the caller must hand it to the guard.
+fn load_helper_sink(name: &str) -> u32 {
+    let sink_name_arg = format!("sink_name={name}");
+    let id: u32 = pactl(&[
+        "load-module",
+        "module-null-sink",
+        sink_name_arg.as_str(),
+        "sink_properties=device.description='Sound-Multiplexer-Livetest-Aux'",
+    ])
+    .trim()
+    .parse()
+    .expect("`pactl load-module` did not print a module id");
+    wait_for("helper sink to appear", APPLY_TIMEOUT, || {
+        sink_names().iter().any(|n| n == name).then_some(())
+    });
+    id
+}
 
 /// Poll `probe` every 50ms until it yields a value; panic after `timeout`.
 fn wait_for<T>(what: &str, timeout: Duration, mut probe: impl FnMut() -> Option<T>) -> T {
@@ -310,20 +350,7 @@ fn full_lifecycle_against_live_server() {
     // --- Provision a second device if the machine has only one sink ------
     if real_sinks.len() < 2 {
         eprintln!("one real sink only; loading helper sink '{AUX_SINK}' as the second device");
-        let sink_name_arg = format!("sink_name={AUX_SINK}");
-        let id: u32 = pactl(&[
-            "load-module",
-            "module-null-sink",
-            sink_name_arg.as_str(),
-            "sink_properties=device.description='Sound-Multiplexer-Livetest-Aux'",
-        ])
-        .trim()
-        .parse()
-        .expect("`pactl load-module` did not print a module id");
-        guard.aux_module = Some(id);
-        wait_for("helper sink to appear", APPLY_TIMEOUT, || {
-            sink_names().iter().any(|n| n == AUX_SINK).then_some(())
-        });
+        guard.aux_modules.push(load_helper_sink(AUX_SINK));
     }
 
     // --- Backend construction and enumeration ----------------------------
@@ -371,6 +398,15 @@ fn full_lifecycle_against_live_server() {
         our_module_rows(&pactl(&["list", "short", "modules"])).is_empty(),
         "single-device routing must not load any module"
     );
+    // No combine sink alive -> no synthetic master row.
+    assert!(
+        backend
+            .list_devices()
+            .expect("list_devices failed")
+            .iter()
+            .all(|d| d.device_type != DeviceType::Master),
+        "single-device routing must not surface a master row"
+    );
     eprintln!("single device routing OK");
 
     // --- 2 enabled: combine sink over both, and it is the default --------
@@ -390,11 +426,31 @@ fn full_lifecycle_against_live_server() {
     let mut expected = vec![sink_a.clone(), sink_b.clone()];
     expected.sort();
     assert_eq!(sorted_slaves, expected, "combine sink must slave BOTH devices");
-    // The combined sink itself never shows up as a device, and `enabled`
-    // reflects exactly the applied set.
+    // Wait for the sink to be enumerable: the master row — and the
+    // alive-checks in apply_enabled — go through the JSON sink listing.
+    wait_for("combined sink to appear in the sink listing", APPLY_TIMEOUT, || {
+        let sink = find_json_sink(COMBINED_SINK)?;
+        (sink["owner_module"].as_u64() == Some(u64::from(combine_id))).then_some(())
+    });
+    // With the combine alive, the synthetic master row LEADS the device
+    // list; the real rows' `enabled` reflects exactly the applied set.
     let devices_now = backend.list_devices().expect("list_devices failed");
-    assert!(devices_now.iter().all(|d| !d.id.starts_with(OUR_PREFIX)));
-    for device in &devices_now {
+    let master = devices_now
+        .first()
+        .expect("device list empty while the combine sink is alive");
+    assert_eq!(master.id, COMBINED_SINK, "master row must lead the device list");
+    assert_eq!(master.device_type, DeviceType::Master);
+    assert_eq!(master.name, "Master volume");
+    assert!(master.enabled, "the master row is always enabled");
+    assert!(
+        devices_now[1..].iter().all(|d| !d.id.starts_with(OUR_PREFIX)),
+        "our sinks leaked into the real-device rows"
+    );
+    assert!(
+        devices_now[1..].iter().all(|d| d.device_type != DeviceType::Master),
+        "only the leading row may be the master"
+    );
+    for device in &devices_now[1..] {
         assert_eq!(
             device.enabled,
             device.id == sink_a || device.id == sink_b,
@@ -405,12 +461,6 @@ fn full_lifecycle_against_live_server() {
     eprintln!("combined routing OK (module #{combine_id}, slaves {slaves:?})");
 
     // --- Idempotency: same set must not rebuild the combine sink ----------
-    // (wait for the sink to be enumerable first: the short-circuit check
-    // verifies module liveness through the JSON sink listing)
-    wait_for("combined sink to appear in the sink listing", APPLY_TIMEOUT, || {
-        let sink = find_json_sink(COMBINED_SINK)?;
-        (sink["owner_module"].as_u64() == Some(u64::from(combine_id))).then_some(())
-    });
     backend
         .apply_enabled(&[sink_a.clone(), sink_b.clone()])
         .expect("idempotent apply_enabled failed");
@@ -422,6 +472,70 @@ fn full_lifecycle_against_live_server() {
     );
     eprintln!("idempotent re-apply OK");
 
+    // --- Master volume: settable via the ordinary set_volume ---------------
+    backend
+        .set_volume(COMBINED_SINK, 0.4)
+        .expect("set_volume on the master row failed");
+    wait_for("master volume 40% to reach the combine sink", APPLY_TIMEOUT, || {
+        let percents = json_channel_percents(&find_json_sink(COMBINED_SINK)?);
+        (!percents.is_empty() && percents.iter().all(|p| p == "40%")).then_some(())
+    });
+    let master_row = backend
+        .list_devices()
+        .expect("list_devices failed")
+        .into_iter()
+        .find(|d| d.device_type == DeviceType::Master)
+        .expect("master row vanished after set_volume");
+    assert!(
+        (master_row.volume - 0.40).abs() < 0.02,
+        "master row must report the combine sink's real volume, got {}",
+        master_row.volume
+    );
+    eprintln!("master volume set OK");
+
+    // --- Master volume survives a combine REBUILD --------------------------
+    // Growing the enabled set to a genuinely different 2+ composition tears
+    // the combine module down and replaces it. A fresh combine sink comes up
+    // at 100%, so the 40% master volume must be carried over explicitly.
+    eprintln!("loading helper sink '{AUX2_SINK}' to force a combine rebuild");
+    guard.aux_modules.push(load_helper_sink(AUX2_SINK));
+    backend
+        .apply_enabled(&[sink_a.clone(), sink_b.clone(), AUX2_SINK.to_string()])
+        .expect("apply_enabled([a, b, aux2]) failed");
+    let (rebuilt_id, rebuilt_slaves) = combine_module(&pactl(&["list", "short", "modules"]))
+        .expect("combine module gone after the rebuild");
+    assert_ne!(
+        rebuilt_id, combine_id,
+        "a different enabled set must REBUILD the combine module"
+    );
+    assert_eq!(
+        rebuilt_slaves.len(),
+        3,
+        "rebuilt combine must slave all three devices: {rebuilt_slaves:?}"
+    );
+    wait_for(
+        "master volume to be preserved at 40% across the rebuild",
+        APPLY_TIMEOUT,
+        || {
+            let percents = json_channel_percents(&find_json_sink_by_owner(rebuilt_id)?);
+            (!percents.is_empty() && percents.iter().all(|p| p == "40%")).then_some(())
+        },
+    );
+    let master_row = backend
+        .list_devices()
+        .expect("list_devices failed")
+        .into_iter()
+        .find(|d| d.device_type == DeviceType::Master)
+        .expect("master row vanished after the rebuild");
+    assert!(
+        (master_row.volume - 0.40).abs() < 0.02,
+        "the rebuild reset the master volume, got {}",
+        master_row.volume
+    );
+    eprintln!(
+        "master volume preserved across rebuild OK (module #{combine_id} -> #{rebuilt_id})"
+    );
+
     // --- 0 enabled: null sink takes over -----------------------------------
     backend.apply_enabled(&[]).expect("apply_enabled([]) failed");
     wait_for("null sink to become default", APPLY_TIMEOUT, || {
@@ -432,6 +546,15 @@ fn full_lifecycle_against_live_server() {
             .is_none()
             .then_some(())
     });
+    // The combine sink is gone -> the master row is gone with it.
+    assert!(
+        backend
+            .list_devices()
+            .expect("list_devices failed")
+            .iter()
+            .all(|d| d.device_type != DeviceType::Master),
+        "silence routing must not surface a master row"
+    );
     eprintln!("silence routing OK");
 
     // --- Back to 1: null sink retired, device is default -------------------
@@ -445,11 +568,37 @@ fn full_lifecycle_against_live_server() {
     eprintln!("silence -> single device OK");
 
     // --- Volume / mute land on the physical sink ---------------------------
+    // Only sink_a is enabled here, so sink_b is a NON-enabled device: its
+    // volume must be adjustable anyway, changing the stored level without
+    // altering the enabled set or the routing.
     backend.set_volume(&sink_b, 0.37).expect("set_volume failed");
     wait_for("volume 37% to reach the sink", APPLY_TIMEOUT, || {
         let percents = json_channel_percents(&find_json_sink(&sink_b)?);
         (!percents.is_empty() && percents.iter().all(|p| p == "37%")).then_some(())
     });
+    assert_eq!(
+        default_sink(),
+        sink_a,
+        "volume on a non-enabled device must not move the default"
+    );
+    assert!(
+        our_module_rows(&pactl(&["list", "short", "modules"])).is_empty(),
+        "volume on a non-enabled device must not load any module"
+    );
+    let devices_after = backend.list_devices().expect("list_devices failed");
+    assert!(
+        devices_after.iter().all(|d| d.enabled == (d.id == sink_a)),
+        "volume on a non-enabled device must not alter the enabled set"
+    );
+    let b_row = devices_after
+        .iter()
+        .find(|d| d.id == sink_b)
+        .expect("sink_b missing from the device list");
+    assert!(
+        (b_row.volume - 0.37).abs() < 0.02,
+        "sink_b must report the freshly set volume, got {}",
+        b_row.volume
+    );
     backend.set_muted(&sink_b, true).expect("set_muted(true) failed");
     wait_for("mute to reach the sink", APPLY_TIMEOUT, || {
         (find_json_sink(&sink_b)?["mute"] == true).then_some(())
@@ -524,7 +673,7 @@ fn full_lifecycle_against_live_server() {
         "sound_multiplexer modules survived restoration"
     );
     assert!(
-        !sink_names().iter().any(|n| n == AUX_SINK),
+        !sink_names().iter().any(|n| n == AUX_SINK || n == AUX2_SINK),
         "helper sink survived restoration"
     );
     eprintln!("state restored: default and all sink volumes/mutes as captured");

@@ -566,3 +566,18 @@ dialog.settings::backdrop { background: oklch(0.1 0.01 250 / 0.45); }
   font-size: var(--text-sm);
 }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+/* ---------- master volume row (the combined output itself) */
+.device[data-master="true"] {
+  border-color: var(--accent);
+}
+.device[data-master="true"] .dev-icon {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.device[data-master="true"] .dev-name {
+  color: var(--text);
+}
+.device[data-master="true"] .switch {
+  display: none;
+}

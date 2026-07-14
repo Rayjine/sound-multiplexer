@@ -54,9 +54,11 @@ test('initial render: volume, mute and enabled state per row', async (t) => {
     assert.equal(slider.value, String(d.pct), d.id + ' slider value');
     assert.equal(slider.style.getPropertyValue('--val'), String(d.pct), d.id + ' --val');
     assert.equal(li.querySelector('.pct').textContent, d.pct + '%', d.id + ' readout');
-    // Slider is usable only on enabled, unmuted devices; mute only on enabled ones.
-    assert.equal(slider.disabled, !d.enabled || d.muted, d.id + ' slider disabled');
-    assert.equal(mute.disabled, !d.enabled, d.id + ' mute disabled');
+    // Volume and mute are ALWAYS adjustable: a disabled row (mock.bt) and a
+    // muted row (mock.hdmi) keep interactive controls — changing the volume
+    // of such a device updates its stored level without touching state.
+    assert.equal(slider.disabled, false, d.id + ' slider must never be disabled');
+    assert.equal(mute.disabled, false, d.id + ' mute must never be disabled');
   }
 
   assert.equal(document.getElementById('app').dataset.empty, 'false');

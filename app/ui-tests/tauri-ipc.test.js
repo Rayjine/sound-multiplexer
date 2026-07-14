@@ -58,6 +58,46 @@ test('slider input invokes set_device_volume with a 0..1 volume', async (t) => {
   ]);
 });
 
+test('slider input on a disabled or muted device sets only the volume', async (t) => {
+  const fake = makeFakeTauri({
+    get_devices: () => [device('dev.off'), device('dev.muted', { enabled: true, muted: true })],
+    set_device_volume: () => null,
+    set_device_enabled: () => null,
+    set_device_muted: () => null,
+  });
+  const window = loadApp(t, { tauri: fake.tauri });
+  await settle();
+  const document = window.document;
+
+  // Disabled device: the slider stays interactive and moving it invokes
+  // set_device_volume only — the enabled set must not change.
+  const offRow = rowById(document, 'dev.off');
+  const offSlider = offRow.querySelector('input[type="range"]');
+  assert.equal(offSlider.disabled, false, 'disabled device keeps an interactive slider');
+  offSlider.value = '30';
+  offSlider.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.deepEqual(fake.callsFor('set_device_volume'), [
+    { cmd: 'set_device_volume', args: { id: 'dev.off', volume: 0.3 } },
+  ]);
+  assert.equal(fake.callsFor('set_device_enabled').length, 0,
+    'volume on a disabled device must not invoke set_device_enabled');
+  assert.equal(offRow.dataset.enabled, 'false', 'row stays disabled');
+
+  // Muted device: same contract, and the mute state is untouched.
+  const mutedRow = rowById(document, 'dev.muted');
+  const mutedSlider = mutedRow.querySelector('input[type="range"]');
+  assert.equal(mutedSlider.disabled, false, 'muted device keeps an interactive slider');
+  mutedSlider.value = '70';
+  mutedSlider.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.deepEqual(fake.callsFor('set_device_volume')[1], {
+    cmd: 'set_device_volume',
+    args: { id: 'dev.muted', volume: 0.7 },
+  });
+  assert.equal(fake.callsFor('set_device_muted').length, 0,
+    'volume on a muted device must not invoke set_device_muted');
+  assert.equal(mutedRow.dataset.muted, 'true', 'row stays muted');
+});
+
 test('rejected set_device_enabled refetches devices, reverts the row and flashes the error', async (t) => {
   const fake = makeFakeTauri({
     // Authoritative state: dev.a stays disabled.

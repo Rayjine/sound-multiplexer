@@ -25,6 +25,10 @@ pub enum DeviceType {
     Hdmi,
     Usb,
     Digital,
+    /// The app's own combined output, surfaced as a "Master volume" row
+    /// while 2+ devices are enabled. Never part of an enabled set; its
+    /// volume/mute apply upstream of every per-device control.
+    Master,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -84,11 +88,12 @@ pub trait AudioBackend: Send {
 }
 
 /// The enabled-id set that results from toggling `id` to `enabled`,
-/// preserving the relative order of the other enabled devices.
+/// preserving the relative order of the other enabled devices. The
+/// synthetic master row is never part of an enabled set.
 pub fn compute_enabled_ids(devices: &[Device], id: &str, enabled: bool) -> Vec<String> {
     let mut ids: Vec<String> = devices
         .iter()
-        .filter(|d| d.enabled && d.id != id)
+        .filter(|d| d.enabled && d.id != id && d.device_type != DeviceType::Master)
         .map(|d| d.id.clone())
         .collect();
     if enabled {
@@ -152,5 +157,14 @@ mod tests {
     fn unknown_id_toggle_off_is_a_no_op() {
         let devices = [dev("a", true)];
         assert_eq!(compute_enabled_ids(&devices, "ghost", false), ["a"]);
+    }
+
+    #[test]
+    fn master_row_never_joins_an_enabled_set() {
+        let mut master = dev("sound_multiplexer_combined", true);
+        master.device_type = DeviceType::Master;
+        let devices = [master, dev("a", true), dev("b", false)];
+        assert_eq!(compute_enabled_ids(&devices, "b", true), ["a", "b"]);
+        assert_eq!(compute_enabled_ids(&devices, "a", false), Vec::<String>::new());
     }
 }
