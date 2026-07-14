@@ -1,68 +1,46 @@
 # Sound Multiplexer
 
-Play audio through several output devices at once on Linux — speakers, headphones and Bluetooth in any combination.
+Play audio through several output devices at once — speakers, headphones and Bluetooth in any combination.
 
-Sound Multiplexer is a small PyQt6 app that builds a combined PulseAudio/PipeWire sink from the devices you select. Each device has its own volume and mute, kept in sync with the system mixer, and devices are picked up as you plug them in.
+Select the devices you want sound on; the app builds a combined PulseAudio/PipeWire sink and makes it the default. Each device keeps its own volume and mute, a master row controls the combined output as a whole, and everything stays in sync with the system mixer both ways.
 
-## Requirements
+## Status
 
-- Linux with PulseAudio, or PipeWire with `pipewire-pulse` (the default on most current distros)
-- Python 3.8+, PyQt6, pulsectl
+Version 2 is a full rewrite in Rust with a Tauri UI, replacing the original Python/PyQt6 app. Linux is tested, including a live end-to-end suite that drives a real PipeWire server. A Windows backend (WASAPI loopback fan-out) is implemented and compiles, but hasn't run on real hardware yet. Installers aren't published yet — build from source below.
 
-## Install
+## Build from source
 
-```bash
-git clone https://github.com/rayjine/sound-multiplexer.git
-cd sound-multiplexer
-./packaging/install.sh
-```
+You need Rust ([rustup.rs](https://rustup.rs)) and, on Linux, the Tauri system libraries:
 
-The script installs your distro's system dependencies (dnf, apt, pacman or zypper) and installs the app for the current user into `~/.local/bin`. Then launch `sound-multiplexer-gui`, or find "Sound Multiplexer" in your application menu.
-
-To install manually instead, get PyQt6 from your distro (`python3-PyQt6` on Fedora/openSUSE, `python3-pyqt6` on Debian/Ubuntu, `python-pyqt6` on Arch), then:
+- Fedora: `sudo dnf install webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel librsvg2-devel dbus-devel`
+- Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev build-essential`
 
 ```bash
-pip3 install --user pulsectl
-make install-user
+cargo build --release
+./target/release/sound-multiplexer
 ```
-
-To run from a source checkout without installing:
-
-```bash
-pip install -r requirements.txt
-python3 main.py
-```
-
-## Usage
-
-Check the devices you want audio to play through. Unchecking everything switches to silence — a null sink, with no fallback to the default device. Each device card has a volume slider and a mute button; both follow and update the system mixer. The gear button opens settings (light/dark/system theme).
-
-The settings dialog also has an "audio sync compensation" toggle, but per-device delay is not implemented yet — the setting currently has no effect.
 
 ## How it works
 
-The app loads a `module-combine-sink` named `sound_multiplexer_combined` with the selected devices as slaves and sets it as the default sink; with nothing selected it loads a `module-null-sink` instead. Closing the app unloads its modules.
+With two or more devices enabled, the app loads a `module-combine-sink` named `sound_multiplexer_combined` with your devices as slaves and sets it as the default sink — that sink is what the app shows as the "Master volume" row, and it's also what the system volume keys control while it's active. With one device enabled there's no extra plumbing, just a plain default device. With none, a null sink gives true silence. Closing the app removes its sinks; a restarted app adopts or cleans up anything a crashed run left behind.
 
-If the app crashes and leaves a stale sink behind:
+Manual cleanup, should you ever need it:
 
 ```bash
 pactl list short modules | grep sound_multiplexer
 pactl unload-module <id>
 ```
 
-Settings are stored under `~/.config/SoundMultiplexer/`.
-
 ## Development
 
 ```bash
-make deps        # runtime dependencies
-make dev-deps    # + black, flake8, mypy, isort
-make lint
-make format
-make dev-install # editable install
+cargo test --workspace            # unit tests
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p sound-multiplexer-audio --test linux_live -- --ignored
+                                  # live end-to-end against your audio server
+                                  # (briefly reroutes audio, restores everything)
+(cd ui-tests && npm test)         # frontend tests (jsdom)
 ```
-
-There is no automated test suite yet.
 
 ## License
 

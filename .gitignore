@@ -1,22 +1,8 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
-venv/
-.venv/
+# Rust / Tauri
+/target/
+/src-tauri/gen/schemas/
 
-# Package build output
-packaging/rpmbuild/
-packaging/debian/
-
-# Rust / Tauri (app/)
-app/target/
-app/src-tauri/gen/schemas/
-
-# Tooling caches
-.mypy_cache/
-.pytest_cache/
+# Local working files
 docs/design-brief.md
 CLAUDE.md
+sound-multiplexer-GUI.zip
