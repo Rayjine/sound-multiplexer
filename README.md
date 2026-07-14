@@ -8,7 +8,7 @@ Select the devices you want sound on; the app builds a combined PulseAudio/PipeW
 
 ## Status
 
-Version 2 is a full rewrite in Rust with a Tauri UI, replacing the original Python/PyQt6 app. Linux is tested, including a live end-to-end suite that drives a real PipeWire server. The Windows build (WASAPI loopback fan-out) passes its tests in CI but hasn't run on real hardware yet. Installers for both — AppImage, deb, rpm and a Windows setup — are on the [releases page](https://github.com/Rayjine/sound-multiplexer/releases), or build from source below.
+The app is written in Rust with a Tauri UI. Linux is tested, including a live end-to-end suite that drives a real PipeWire server. The Windows build (WASAPI loopback fan-out) passes its tests in CI but hasn't run on real hardware yet. Installers for both — AppImage, deb, rpm and a Windows setup — are on the [releases page](https://github.com/Rayjine/sound-multiplexer/releases), or build from source below.
 
 ## Build from source
 

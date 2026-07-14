@@ -34,7 +34,7 @@ Not part of `cargo test`; CI runs it as a separate step.
 row reuse, minimal-move reorder, removal), `tauri-ipc` (command payloads,
 optimistic revert on rejection), `interactions` (switch/mute/slider/bulk,
 status wording), `master-row` (synthetic combined-output row contract),
-`theme` (cycling + persistence).
+`theme` (settings radios + persistence).
 
 ## Adding a test
 

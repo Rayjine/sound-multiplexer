@@ -45,7 +45,7 @@ test('status wording: singular count, then silent mode when nothing is enabled',
   assert.equal(statusText.textContent, 'Silent mode — no devices selected');
 });
 
-test('mute click shows muted hooks (data-muted, chip, aria) and keeps the slider interactive', async (t) => {
+test('mute click shows muted hooks (data-muted, aria) and keeps the slider interactive', async (t) => {
   const window = loadApp(t);
   await settle();
   const li = rowById(window.document, 'mock.analog');
@@ -59,7 +59,6 @@ test('mute click shows muted hooks (data-muted, chip, aria) and keeps the slider
   assert.equal(li.dataset.muted, 'true');
   assert.equal(mute.getAttribute('aria-pressed'), 'true');
   assert.equal(mute.getAttribute('aria-label'), 'Unmute Built-in Audio Analog Stereo');
-  assert.equal(li.querySelector('.muted-chip').textContent, 'Muted');
   assert.equal(slider.disabled, false, 'muted row keeps an interactive slider');
   assert.equal(mute.disabled, false, 'mute stays clickable so the user can unmute');
   await settle();
@@ -115,4 +114,50 @@ test('select all / deselect all update every row and the status line', async (t)
   assert.equal(document.getElementById('app').dataset.empty, 'false');
   await settle();
   assert.equal(statusText.textContent, 'Silent mode — no devices selected');
+});
+
+function wheel(window, target, deltaY, deltaMode = 0) {
+  target.dispatchEvent(new window.WheelEvent('wheel', { deltaY, deltaMode, bubbles: true, cancelable: true }));
+}
+
+test('a wheel notch on a row nudges the volume by 5%, clamped to 0-100', async (t) => {
+  const window = loadApp(t);
+  await settle();
+  const document = window.document;
+  const li = rowById(document, 'mock.analog'); // starts at 65%
+  const slider = li.querySelector('input[type="range"]');
+
+  wheel(window, li, -40); // one discrete notch up (webkit reports ~40px)
+  assert.equal(slider.value, '70');
+  assert.equal(li.querySelector('.pct').value, '70%');
+
+  wheel(window, li, 40);
+  assert.equal(slider.value, '65');
+
+  wheel(window, li, -3, 1); // one notch in line mode (Firefox-style)
+  assert.equal(slider.value, '70');
+
+  const maxed = rowById(document, 'mock.hdmi'); // starts at 100%
+  wheel(window, maxed, -40);
+  assert.equal(maxed.querySelector('input[type="range"]').value, '100', 'clamped at the top');
+});
+
+test('fine touchpad deltas accumulate into a single step instead of one per event', async (t) => {
+  const window = loadApp(t);
+  await settle();
+  const li = rowById(window.document, 'mock.analog'); // starts at 65%
+  const slider = li.querySelector('input[type="range"]');
+
+  wheel(window, li, -12);
+  wheel(window, li, -12);
+  assert.equal(slider.value, '65', 'below the accumulation threshold: no step yet');
+  wheel(window, li, -12); // 36px accumulated -> one 5% step
+  assert.equal(slider.value, '70');
+});
+
+test('the toolbar has no refresh button; the empty state keeps one', async (t) => {
+  const window = loadApp(t);
+  await settle();
+  assert.equal(window.document.getElementById('refreshBtn'), null);
+  assert.notEqual(window.document.getElementById('emptyRefreshBtn'), null);
 });

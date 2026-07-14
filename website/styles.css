@@ -28,6 +28,9 @@
   --accent-soft: oklch(0.50 0.115 240 / 0.10);
   --on-accent: oklch(0.99 0.002 240);
   --ok: oklch(0.50 0.115 150);
+  --warn: oklch(0.52 0.115 65);
+  --danger: oklch(0.52 0.14 25);
+  --danger-soft: oklch(0.52 0.14 25 / 0.10);
   --shadow: 0 1px 2px oklch(0.2 0.01 250 / 0.06), 0 1px 1px oklch(0.2 0.01 250 / 0.04);
   --shadow-win: 0 12px 40px oklch(0.2 0.01 250 / 0.22);
 }
@@ -49,6 +52,9 @@
     --accent-soft: oklch(0.72 0.105 240 / 0.14);
     --on-accent: oklch(0.18 0.02 240);
     --ok: oklch(0.74 0.105 150);
+    --warn: oklch(0.78 0.105 75);
+    --danger: oklch(0.70 0.13 25);
+    --danger-soft: oklch(0.70 0.13 25 / 0.14);
     --shadow: 0 1px 2px oklch(0 0 0 / 0.30), 0 1px 1px oklch(0 0 0 / 0.20);
     --shadow-win: 0 12px 40px oklch(0 0 0 / 0.5);
   }
@@ -145,7 +151,8 @@ h1, h2 { line-height: 1.2; margin: 0 0 0.5em; }
 .aw-device[data-on="false"] { background: var(--card-off); }
 .aw-device[data-on="false"] .aw-icon,
 .aw-device[data-on="false"] .aw-name,
-.aw-device[data-on="false"] .aw-pct { opacity: 0.55; }
+.aw-device[data-on="false"] .aw-vol { opacity: 0.55; }
+.aw-device[data-muted="true"] .aw-pct { text-decoration: line-through; }
 .aw-master { border-color: var(--accent); }
 .aw-icon {
   flex: none;
@@ -157,40 +164,74 @@ h1, h2 { line-height: 1.2; margin: 0 0 0.5em; }
 .aw-master .aw-icon { background: var(--accent); color: var(--on-accent); }
 .aw-main { flex: 1; min-width: 0; }
 .aw-name { display: block; font-weight: 600; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.aw-vol { display: flex; align-items: center; gap: 10px; }
+.aw-vol { display: flex; align-items: center; gap: 8px; }
+.aw-mute {
+  flex: none;
+  display: grid; place-items: center;
+  width: 26px; height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.aw-mute:hover { background: var(--accent-soft); border-color: var(--border-strong); }
+.aw-mute .aw-ic-un, .aw-mute .aw-ic-mu { display: grid; }
+.aw-mute .aw-ic-mu { display: none; }
+.aw-mute[aria-pressed="true"] {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.aw-mute[aria-pressed="true"] .aw-ic-un { display: none; }
+.aw-mute[aria-pressed="true"] .aw-ic-mu { display: grid; }
 .aw-track {
   position: relative; flex: 1; height: 6px;
   border-radius: var(--radius-full);
   background: var(--inset);
+  cursor: pointer;
+  /* pan-y keeps vertical page scrolling alive on touch; horizontal drags
+     still deliver pointer events */
+  touch-action: pan-y;
 }
+.aw-track:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+/* widen the hit area beyond the 6px visual track */
+.aw-track::before { content: ""; position: absolute; inset: -8px 0; }
 .aw-fill { position: absolute; inset: 0 auto 0 0; border-radius: var(--radius-full); background: var(--accent); }
 .aw-thumb {
   position: absolute; top: 50%;
   width: 14px; height: 22px;
   transform: translate(-50%, -50%);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--border-strong);
+  background: var(--accent);
+  border: 1px solid var(--accent);
   box-shadow: var(--shadow);
+  pointer-events: none;
 }
 .aw-pct { font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12px; min-width: 32px; text-align: right; }
 .aw-switch {
   flex: none; position: relative;
   width: 42px; height: 24px;
+  padding: 0;
   border-radius: var(--radius-full);
   background: var(--inset);
   border: 1px solid var(--border);
+  cursor: pointer;
 }
+/* knob: 18px + 2px border in a 22px padding box — 1px inset centers it */
 .aw-switch::after {
   content: "";
-  position: absolute; top: 2px; left: 2px;
+  position: absolute; top: 1px; left: 1px;
   width: 18px; height: 18px;
   border-radius: var(--radius-full);
   background: var(--card);
+  border: 1px solid var(--border-strong);
   box-shadow: var(--shadow);
+  transition: left 120ms ease;
 }
-.aw-switch[data-on="true"] { background: var(--accent); border-color: var(--accent); }
-.aw-switch[data-on="true"]::after { left: auto; right: 2px; background: var(--on-accent); }
+.aw-switch[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
+.aw-switch[aria-pressed="true"]::after { left: calc(100% - 21px); background: var(--on-accent); border-color: var(--accent); }
 .aw-status {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 14px;
@@ -198,6 +239,7 @@ h1, h2 { line-height: 1.2; margin: 0 0 0.5em; }
   color: var(--text-2); font-size: 12.5px;
 }
 .aw-dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--ok); }
+.aw-dot[data-state="silent"] { background: var(--warn); }
 
 /* ============================================================ features */
 .features {

@@ -1,6 +1,5 @@
 //! Linux backend: drives PulseAudio (or PipeWire via pipewire-pulse)
-//! through the `pactl` CLI, porting the proven logic of the original
-//! Python implementation (src/audio_manager.py).
+//! through the `pactl` CLI.
 //!
 //! Routing:
 //!   2+ enabled -> `pactl load-module module-combine-sink
@@ -764,7 +763,7 @@ fn parse_sinks(json: &str) -> anyhow::Result<Vec<Sink>> {
 
 /// Classify a sink from its name, description and udev properties.
 /// Priority matters: Bluetooth headphones must classify as Bluetooth, and a
-/// USB headset as Headphones, matching the original Python heuristics.
+/// USB headset as Headphones.
 fn infer_device_type(
     name: &str,
     description: &str,

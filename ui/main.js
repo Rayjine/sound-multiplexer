@@ -120,6 +120,7 @@
   var devices = [];          // last known full state
   var rows = new Map();      // device id -> <li> element
   var draggingId = null;     // device whose slider is being dragged
+  var WHEEL_STEP = 5;        // % per wheel notch when scrolling on a row
 
   function updateStatus() {
     app.dataset.empty = String(realDevices().length === 0);
@@ -177,7 +178,12 @@
     var pushVolume = throttle(function (value) {
       api.setVolume(d.id, value / 100).catch(surfaceError);
     }, 80);
+    var wheelEndTimer = null;
     slider.addEventListener('input', function () {
+      // The slider takes over any wheel session; a stale wheel-end push
+      // would otherwise override the newer drag value.
+      clearTimeout(wheelEndTimer);
+      wheelEndTimer = null;
       draggingId = d.id;
       var dev = findDevice(d.id);
       if (dev) dev.volume = slider.value / 100;
@@ -186,9 +192,54 @@
       pushVolume(Number(slider.value));
     });
     slider.addEventListener('change', function () {
+      clearTimeout(wheelEndTimer);
+      wheelEndTimer = null;
       draggingId = null;
       api.setVolume(d.id, Number(slider.value) / 100).catch(surfaceError);
     });
+
+    // Scrolling on the row nudges the volume (pavucontrol-style). A discrete
+    // notch (>= 30px equivalent) is one step no matter its reported size;
+    // finer touchpad deltas accumulate, so a flick can't slam the volume.
+    var wheelAcc = 0;
+    function wheelStep(e) {
+      var px = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      if (Math.abs(px) >= 30) { wheelAcc = 0; return px < 0 ? 1 : -1; }
+      wheelAcc += px;
+      if (Math.abs(wheelAcc) < 30) return 0;
+      var dir = wheelAcc < 0 ? 1 : -1;
+      wheelAcc = 0;
+      return dir;
+    }
+    li.addEventListener('wheel', function (e) {
+      if (!e.deltaY) return;
+      // Once the list overflows, plain wheel keeps scrolling it — only the
+      // slider cluster still owns the wheel then.
+      var scroller = li.closest('.device-scroll');
+      if (scroller && scroller.scrollHeight > scroller.clientHeight &&
+          !(e.target.closest && e.target.closest('.dev-volume'))) return;
+      e.preventDefault();
+      var step = wheelStep(e);
+      if (step) {
+        draggingId = d.id;
+        // slider.value is the drag-guarded source of truth; devices[] may
+        // hold a lagging backend echo mid-session.
+        var pct = Math.max(0, Math.min(100, Number(slider.value) + step * WHEEL_STEP));
+        var dev = findDevice(d.id);
+        if (dev) dev.volume = pct / 100;
+        slider.value = pct;
+        slider.style.setProperty('--val', pct);
+        li.querySelector('.pct').value = pct + '%';
+        pushVolume(pct);
+      }
+      clearTimeout(wheelEndTimer);
+      wheelEndTimer = setTimeout(function () {
+        wheelEndTimer = null;
+        if (draggingId === d.id) draggingId = null;
+        if (!findDevice(d.id)) return; // device vanished mid-wheel
+        api.setVolume(d.id, Number(slider.value) / 100).catch(surfaceError);
+      }, 250);
+    }, { passive: false });
 
     return li;
   }
@@ -338,7 +389,8 @@
   }
 
   /* ================= toolbar ================= */
-  document.getElementById('refreshBtn').addEventListener('click', refresh);
+  // No toolbar refresh: the backend monitor pushes every change on its own;
+  // the empty state keeps a manual refresh as the recovery path.
   document.getElementById('emptyRefreshBtn').addEventListener('click', refresh);
   document.getElementById('selectAllBtn').addEventListener('click', function () {
     devices = devices.map(function (d) { return Object.assign({}, d, { enabled: true }); });
@@ -351,26 +403,18 @@
     api.setAllEnabled(false).catch(revertOnError);
   });
 
-  /* ================= theme ================= */
+  /* ================= theme (set from the settings dialog) ================= */
   var MODES = ['system', 'light', 'dark'];
   function applyTheme(mode, persist) {
     if (MODES.indexOf(mode) === -1) mode = 'system';
     if (mode === 'system') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', mode);
-    document.getElementById('themeLabel').textContent = mode[0].toUpperCase() + mode.slice(1);
-    document.getElementById('themeIconSystem').style.display = mode === 'system' ? '' : 'none';
-    document.getElementById('themeIconLight').style.display = mode === 'light' ? '' : 'none';
-    document.getElementById('themeIconDark').style.display = mode === 'dark' ? '' : 'none';
     var radio = document.querySelector('input[name="theme"][value="' + mode + '"]');
     if (radio) radio.checked = true;
     if (persist) {
       try { localStorage.setItem('theme', mode); } catch (e) { /* storage unavailable */ }
     }
   }
-  document.getElementById('themeToggle').addEventListener('click', function () {
-    var current = document.documentElement.getAttribute('data-theme') || 'system';
-    applyTheme(MODES[(MODES.indexOf(current) + 1) % MODES.length], true);
-  });
   document.querySelectorAll('input[name="theme"]').forEach(function (r) {
     r.addEventListener('change', function () { applyTheme(r.value, true); });
   });
