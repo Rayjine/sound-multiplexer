@@ -70,7 +70,10 @@ jobs:
             pactl info
             pactl load-module module-null-sink sink_name=ci_dev_a "sink_properties=device.description=CI-Device-A"
             pactl load-module module-null-sink sink_name=ci_dev_b "sink_properties=device.description=CI-Device-B"
-            pactl set-default-sink ci_dev_a
+            # set-default-sink needs WirePlumber (it owns the default metadata),
+            # which may still be starting even though pipewire-pulse answers.
+            for _ in $(seq 1 60); do pactl set-default-sink ci_dev_a 2>/dev/null && break; sleep 0.5; done
+            test "$(pactl get-default-sink)" = ci_dev_a
             cargo test -p sound-multiplexer-audio --test linux_live -- --ignored --nocapture
           '
 
@@ -118,8 +121,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # NO_STRIP: linuxdeploy's bundled strip predates .relr.dyn sections and
+      # dies on libraries built with them; distro libs are pre-stripped anyway.
       - name: Build deb/rpm/AppImage bundles
         run: npx --yes "@tauri-apps/cli@^2" build --bundles deb,rpm,appimage
+        env:
+          NO_STRIP: true
 
       - uses: actions/upload-artifact@v4
         with:
