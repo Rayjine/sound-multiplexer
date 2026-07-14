@@ -41,9 +41,11 @@
 //!
 //! Linux (`pactl` driving PulseAudio or pipewire-pulse) is the proven
 //! backend: unit tests, an `--ignored` live E2E test against a real sound
-//! server, and real-world use. Windows (WASAPI) compiles and its pure logic
-//! is unit-tested, but it has never run on real hardware — treat it as
-//! unverified.
+//! server, and real-world use. Windows (WASAPI) is unit-tested and verified
+//! on real hardware by its own `--ignored` live E2E test
+//! (`tests/windows_live.rs`), which drives the full routing lifecycle
+//! against real endpoints and measures that the fan-out actually mirrors
+//! audio.
 
 #![warn(missing_docs)]
 

@@ -84,6 +84,13 @@ impl Ring {
         }
     }
 
+    /// Currently buffered bytes. A momentary lower bound for the consumer:
+    /// only the render side pops, so the value can only have grown by the
+    /// time a subsequent [`Ring::pop_into`] runs.
+    pub fn buffered_bytes(&self) -> usize {
+        self.lock().len()
+    }
+
     /// Move as many whole frames as fit into `out`; returns bytes written.
     pub fn pop_into(&self, out: &mut [u8]) -> usize {
         let mut buf = self.lock();

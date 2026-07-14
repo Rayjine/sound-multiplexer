@@ -7,10 +7,19 @@
 //! Windows realities encoded here:
 //! - Loopback capture only sees the shared-mode mix. Exclusive-mode and
 //!   DRM-protected streams bypass the mix and are mirrored as silence.
-//! - Secondary outputs lag the primary by roughly the ring target (~60 ms).
-//!   That is accepted v1 behavior; `IAudioClockAdjustment`-based rate
-//!   matching is the planned refinement over the occupancy-clamp drift
-//!   strategy implemented in [`Ring::push`].
+//! - Loopback also taps the mix *after* the endpoint's software volume/mute,
+//!   so on endpoints without hardware volume the primary's volume and mute
+//!   scale and silence every secondary too. Accepted v1 behavior; the
+//!   `QueryHardwareSupport`-gated inverse-gain compensation is a planned
+//!   refinement.
+//! - Secondary outputs lag the primary by roughly [`FILL_TARGET_MS`]
+//!   (~60 ms): the render loop keeps the device buffer filled to that
+//!   level — not to the brim — so the buffer itself is the jitter cushion
+//!   (see [`run_render`]). Drift between unsynchronized device clocks is
+//!   handled by the ring occupancy clamp ([`Ring::push`]) in the
+//!   slow-secondary direction and by low-water silence refills in the
+//!   fast-secondary direction; `IAudioClockAdjustment` rate matching is the
+//!   planned refinement.
 //! - Event-driven loopback capture is historically unreliable when the
 //!   endpoint has no active render stream (the event may never fire), so
 //!   the capture wait uses a short timeout and drains on the timer too.
@@ -43,7 +52,15 @@ use super::{create_enumerator, ensure_com, get_device};
 use crate::fanout::{FrameLayout, Ring};
 use crate::BackendEvent;
 
-/// Steady-state ring fill: the secondary-output lag.
+/// Render-buffer fill target: the secondary-output lag, and the cushion that
+/// absorbs capture/render timing jitter without splicing silence gaps.
+const FILL_TARGET_MS: usize = 60;
+/// When the render buffer sags below this with an empty ring (capture gone
+/// quiet, or fast-secondary clock drift has eaten the cushion), it is topped
+/// back up to target with silence in one splice.
+const FILL_LOW_WATER_MS: usize = 20;
+/// Ring clamp levels: occupancy above the max (sustained slow-secondary
+/// drift) drops the oldest frames back to the target.
 const RING_TARGET_MS: usize = 60;
 /// Occupancy ceiling; above this the oldest frames are dropped back to target.
 const RING_MAX_MS: usize = 120;
@@ -397,26 +414,53 @@ fn run_render(ctx: &StreamCtx, ring: &Ring) -> anyhow::Result<()> {
     let render: IAudioRenderClient =
         unsafe { client.GetService() }.context("get IAudioRenderClient")?;
     let buffer_frames = unsafe { client.GetBufferSize() }.context("GetBufferSize")?;
-    unsafe { client.Start() }.context("start render stream")?;
 
     let frame_size = ctx.format.layout.block_align;
+    let layout = &ctx.format.layout;
+    // The device buffer doubles as the jitter cushion: fill it to the target
+    // (never to the brim) and only ever write what the ring can supply. A
+    // late capture packet then just leaves the cushion a little lower until
+    // the data arrives, instead of forcing a silence splice into the stream.
+    let target_frames = (layout.bytes_for_ms(FILL_TARGET_MS) / frame_size) as u32;
+    let target_frames = target_frames.min(buffer_frames);
+    let low_water_frames = (layout.bytes_for_ms(FILL_LOW_WATER_MS) / frame_size) as u32;
+    // Establish the cushion before Start so the first captured frames queue
+    // behind it instead of playing immediately and being followed by a gap.
+    {
+        let data = unsafe { render.GetBuffer(target_frames) }.context("render prefill")?;
+        anyhow::ensure!(!data.is_null(), "render GetBuffer returned null");
+        unsafe { std::slice::from_raw_parts_mut(data, target_frames as usize * frame_size) }
+            .fill(0);
+        unsafe { render.ReleaseBuffer(target_frames, 0) }.context("render prefill release")?;
+    }
+    unsafe { client.Start() }.context("start render stream")?;
+
     while !ctx.stop.load(Ordering::SeqCst) {
         let wait = unsafe { WaitForSingleObject(event.0, RENDER_WAIT_MS) };
         if wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT {
             anyhow::bail!("wait on render event failed: {wait:?}");
         }
         let padding = unsafe { client.GetCurrentPadding() }.context("GetCurrentPadding")?;
-        let want_frames = buffer_frames.saturating_sub(padding);
-        if want_frames == 0 {
+        let deficit = target_frames.saturating_sub(padding);
+        if deficit == 0 {
             continue;
         }
+        let ring_frames = (ring.buffered_bytes() / frame_size) as u32;
+        // Prefer real audio; write silence only when the cushion is nearly
+        // gone (startup, source idle, or fast-secondary drift has consumed
+        // it) — zero samples are silence in every shared-mode PCM format.
+        let want_frames = if ring_frames > 0 {
+            deficit.min(ring_frames)
+        } else if padding < low_water_frames {
+            deficit
+        } else {
+            continue;
+        };
         let data = unsafe { render.GetBuffer(want_frames) }.context("render GetBuffer")?;
         anyhow::ensure!(!data.is_null(), "render GetBuffer returned null");
         let out =
             unsafe { std::slice::from_raw_parts_mut(data, want_frames as usize * frame_size) };
         let filled = ring.pop_into(out);
-        // Ring underrun (source quiet, capture gap, or startup): pad with
-        // silence — zero samples are silence in every shared-mode PCM format.
         out[filled..].fill(0);
         unsafe { render.ReleaseBuffer(want_frames, 0) }.context("render ReleaseBuffer")?;
     }

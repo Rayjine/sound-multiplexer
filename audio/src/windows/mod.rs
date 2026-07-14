@@ -19,7 +19,9 @@
 
 mod engine;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
@@ -172,17 +174,98 @@ fn prop_u32(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
     number
 }
 
-/// Classify an endpoint. The transport (Bluetooth/USB, from the device
-/// enumerator name) is checked around the form factor: BT headsets report the
-/// Headphones/Headset form factor, so Bluetooth must win first (parity with
-/// the Python implementation's priority order), while USB is only a fallback
-/// for endpoints whose form factor carries no more specific information.
-fn infer_device_type(name: &str, form_factor: Option<u32>, bus: Option<&str>) -> DeviceType {
+/// Adapter interface friendly name (`PKEY_DeviceInterface_FriendlyName`,
+/// e.g. "Intel® Smart Sound Technology for Bluetooth® Audio"): audio-offload
+/// stacks route Bluetooth endpoints through the platform DSP driver, so the
+/// endpoint's own enumerator says INTELAUDIO/ACX rather than BTHENUM and the
+/// adapter name is the only documented property still naming the transport.
+const PKEY_ADAPTER_NAME: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x026e516e_b814_414b_83cd_856d6fef4822),
+    pid: 2,
+};
+
+/// Undocumented but long-stable MMDevice endpoint property holding the PnP
+/// path of the audio adapter *as seen by the bus* — for Bluetooth endpoints a
+/// `BTHENUM\{service-uuid}_...` path even on offload stacks whose enumerator
+/// name no longer says BTHENUM. The service UUID distinguishes A2DP
+/// (`0000110b`, AudioSink) from Hands-Free telephony (`0000111e`/`0000111f`).
+const PKEY_ENDPOINT_BUS_PATH: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0xb3f8fa53_0004_438e_9003_51a46e139bfc),
+    pid: 39,
+};
+
+/// Adapter friendly name under the same undocumented MMDevice set; present
+/// on endpoints (observed: Bluetooth offload) where the documented
+/// [`PKEY_ADAPTER_NAME`] is empty.
+const PKEY_ENDPOINT_ADAPTER_NAME: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0xb3f8fa53_0004_438e_9003_51a46e139bfc),
+    pid: 6,
+};
+
+/// Transport-identifying endpoint properties, gathered once per endpoint and
+/// consumed by [`infer_device_type`] and [`is_handsfree_endpoint`].
+#[derive(Default)]
+struct TransportInfo {
+    /// `PKEY_Device_EnumeratorName`: BTHENUM/BTHHFENUM on the classic
+    /// Bluetooth stack; the platform audio driver (e.g. INTELAUDIO) on
+    /// offload stacks.
+    enumerator: Option<String>,
+    /// See [`PKEY_ENDPOINT_BUS_PATH`].
+    bus_path: Option<String>,
+    /// Adapter name from [`PKEY_ADAPTER_NAME`], falling back to
+    /// [`PKEY_ENDPOINT_ADAPTER_NAME`].
+    adapter: Option<String>,
+}
+
+impl TransportInfo {
+    fn read(store: &IPropertyStore) -> Self {
+        Self {
+            enumerator: prop_string(store, &PKEY_Device_EnumeratorName),
+            bus_path: prop_string(store, &PKEY_ENDPOINT_BUS_PATH),
+            adapter: prop_string(store, &PKEY_ADAPTER_NAME)
+                .or_else(|| prop_string(store, &PKEY_ENDPOINT_ADAPTER_NAME)),
+        }
+    }
+
+    fn is_bluetooth(&self) -> bool {
+        let enum_bt = self
+            .enumerator
+            .as_deref()
+            .is_some_and(|e| e.eq_ignore_ascii_case("BTHENUM") || e.eq_ignore_ascii_case("BTHHFENUM"));
+        let path_bt = self
+            .bus_path
+            .as_deref()
+            .is_some_and(|p| p.to_ascii_lowercase().contains("bthenum"));
+        let adapter_bt = self
+            .adapter
+            .as_deref()
+            .is_some_and(|a| a.to_ascii_lowercase().contains("bluetooth"));
+        enum_bt || path_bt || adapter_bt
+    }
+
+    fn is_usb(&self) -> bool {
+        let enum_usb = self
+            .enumerator
+            .as_deref()
+            .is_some_and(|e| e.eq_ignore_ascii_case("USB"));
+        let adapter_usb = self
+            .adapter
+            .as_deref()
+            .is_some_and(|a| a.to_ascii_lowercase().contains("usb"));
+        enum_usb || adapter_usb
+    }
+}
+
+/// Classify an endpoint. The transport (Bluetooth/USB) is checked around the
+/// form factor: BT headsets report the Headphones/Headset form factor, so
+/// Bluetooth must win first (priority order is part of the cross-platform
+/// contract, see [`DeviceType`]), while USB is only a fallback for endpoints
+/// whose form factor carries no more specific information. Real hardware
+/// (Intel SST offload) showed the enumerator name alone is not enough, hence
+/// the layered [`TransportInfo`] checks.
+fn infer_device_type(name: &str, form_factor: Option<u32>, transport: &TransportInfo) -> DeviceType {
     let lower = name.to_ascii_lowercase();
-    if bus.is_some_and(|b| b.eq_ignore_ascii_case("BTHENUM"))
-        || lower.contains("bluetooth")
-        || lower.contains("bt-")
-    {
+    if transport.is_bluetooth() || lower.contains("bluetooth") || lower.contains("bt-") {
         return DeviceType::Bluetooth;
     }
     match form_factor {
@@ -193,28 +276,69 @@ fn infer_device_type(name: &str, form_factor: Option<u32>, bus: Option<&str>) ->
         Some(f) if f == FF_SPDIF.0 as u32 => return DeviceType::Digital,
         _ => {}
     }
-    if bus.is_some_and(|b| b.eq_ignore_ascii_case("USB")) || lower.contains("usb") {
+    if transport.is_usb() || lower.contains("usb") {
         return DeviceType::Usb;
     }
     DeviceType::Speakers
+}
+
+/// Bluetooth Hands-Free (HFP) telephony endpoints are excluded from the
+/// device list: they coexist with the same headset's A2DP endpoint, and
+/// opening a render stream on one flips the headset out of A2DP — enabling
+/// both (e.g. via "Select all") collapses the headset to telephony-quality
+/// audio and invalidates the A2DP stream. One row per physical device also
+/// matches the Linux backend, where HFP is a profile, not a separate sink.
+fn is_handsfree_endpoint(name: &str, form_factor: Option<u32>, transport: &TransportInfo) -> bool {
+    // Classic stack: HFP endpoints enumerate under BTHHFENUM.
+    if transport
+        .enumerator
+        .as_deref()
+        .is_some_and(|e| e.eq_ignore_ascii_case("BTHHFENUM"))
+    {
+        return true;
+    }
+    // Offload stacks: the bus path names the Bluetooth service —
+    // 0000111e = Hands-Free, 0000111f = Hands-Free Audio Gateway.
+    if transport.bus_path.as_deref().is_some_and(|p| {
+        let p = p.to_ascii_lowercase();
+        p.contains("0000111e") || p.contains("0000111f")
+    }) {
+        return true;
+    }
+    // Last resort: the driver-provided endpoint name. Only trusted together
+    // with the Headset form factor so a coincidentally named wired device
+    // cannot be hidden.
+    form_factor == Some(FF_HEADSET.0 as u32) && name.to_ascii_lowercase().contains("hands-free")
 }
 
 fn read_device(device: &IMMDevice, id: &str, enabled: &[String]) -> anyhow::Result<Device> {
     let store = unsafe { device.OpenPropertyStore(STGM_READ) }.context("open property store")?;
     let name = prop_string(&store, &PKEY_Device_FriendlyName).unwrap_or_else(|| id.to_string());
     let form_factor = prop_u32(&store, &PKEY_AudioEndpoint_FormFactor);
-    let bus = prop_string(&store, &PKEY_Device_EnumeratorName);
+    let transport = TransportInfo::read(&store);
     let volume = endpoint_volume(device)?;
     let level = unsafe { volume.GetMasterVolumeLevelScalar() }.context("get volume")?;
     let muted = unsafe { volume.GetMute() }.context("get mute")?.as_bool();
     Ok(Device {
-        device_type: infer_device_type(&name, form_factor, bus.as_deref()),
+        device_type: infer_device_type(&name, form_factor, &transport),
         id: id.to_string(),
         name,
         enabled: enabled.iter().any(|e| e == id),
         volume: level.clamp(0.0, 1.0),
         muted,
     })
+}
+
+/// Is this endpoint a Hands-Free telephony endpoint (see
+/// [`is_handsfree_endpoint`])? Property-read failures count as "no": better
+/// to show a questionable row than to hide a real device.
+fn device_is_handsfree(device: &IMMDevice, id: &str) -> bool {
+    let Ok(store) = (unsafe { device.OpenPropertyStore(STGM_READ) }) else {
+        return false;
+    };
+    let name = prop_string(&store, &PKEY_Device_FriendlyName).unwrap_or_else(|| id.to_string());
+    let form_factor = prop_u32(&store, &PKEY_AudioEndpoint_FormFactor);
+    is_handsfree_endpoint(&name, form_factor, &TransportInfo::read(&store))
 }
 
 // ---------------------------------------------------------------------------
@@ -421,11 +545,32 @@ impl Monitor {
         Ok(monitor)
     }
 
-    /// (Re)register an IAudioEndpointVolumeCallback on every active endpoint.
-    /// Called after every enumeration so watches follow device hotplug.
+    /// Bring the IAudioEndpointVolumeCallback registrations in line with the
+    /// active endpoints. Called after every enumeration so watches follow
+    /// device hotplug. Incremental on purpose: existing registrations are
+    /// kept, not torn down and re-created — a change notification landing in
+    /// an unregister/re-register window would be silently lost (the UI would
+    /// show a stale volume until some unrelated event), and enumeration runs
+    /// on every pump cycle.
     fn refresh_volume_watches(&mut self) -> anyhow::Result<()> {
-        self.clear_volume_watches();
-        for (device, id) in enumerate_endpoints(&self.enumerator)? {
+        let endpoints = enumerate_endpoints(&self.enumerator)?;
+        // Drop watches whose endpoint is gone.
+        let (keep, drop): (Vec<VolumeWatch>, Vec<VolumeWatch>) = self
+            .volume_watches
+            .drain(..)
+            .partition(|w| endpoints.iter().any(|(_, id)| *id == w.id));
+        self.volume_watches = keep;
+        for watch in drop {
+            if let Err(e) = unsafe { watch.volume.UnregisterControlChangeNotify(&watch.callback) }
+            {
+                debug!("unregister volume callback for {}: {e}", watch.id);
+            }
+        }
+        // Watch endpoints that appeared.
+        for (device, id) in endpoints {
+            if self.volume_watches.iter().any(|w| w.id == id) {
+                continue;
+            }
             let volume = match endpoint_volume(&device) {
                 Ok(v) => v,
                 Err(e) => {
@@ -489,8 +634,9 @@ impl Drop for Monitor {
 const ENGINE_RESTART_COOLDOWN: Duration = Duration::from_secs(2);
 
 /// WASAPI backend; see the module docs for the routing scheme and COM
-/// threading rules. Compiles and is unit-tested, but has never run on real
-/// hardware (see the crate docs on platform coverage).
+/// threading rules. Unit-tested, and verified on real hardware by the
+/// opt-in live E2E in `tests/windows_live.rs` (see the crate docs on
+/// platform coverage).
 pub struct WindowsBackend {
     /// Currently applied enabled set (endpoint IDs).
     enabled: Vec<String>,
@@ -504,6 +650,11 @@ pub struct WindowsBackend {
     silent_muted: Option<String>,
     /// When the engine was last rebuilt automatically after a stream failure.
     last_engine_restart: Option<Instant>,
+    /// A cooldown-deferred rebuild has a wake-up thread pending. Without the
+    /// nudge, a failure landing inside the cooldown would consume its only
+    /// DevicesChanged event and the engine would stay dead until some
+    /// unrelated event re-listed devices.
+    restart_nudge_pending: Arc<AtomicBool>,
     monitor: Option<Agile<Monitor>>,
     tx: Option<Sender<BackendEvent>>,
 }
@@ -532,6 +683,7 @@ impl WindowsBackend {
             desired_silent: false,
             silent_muted: None,
             last_engine_restart: None,
+            restart_nudge_pending: Arc::new(AtomicBool::new(false)),
             monitor: None,
             tx: None,
         })
@@ -608,6 +760,7 @@ impl WindowsBackend {
                 .is_some_and(|t| t.elapsed() < ENGINE_RESTART_COOLDOWN);
             if cooling_down {
                 debug!("engine stream died again within cooldown; deferring rebuild");
+                self.schedule_restart_nudge();
             } else {
                 self.last_engine_restart = Some(Instant::now());
                 info!("engine stream died; re-applying routing to surviving devices");
@@ -618,12 +771,54 @@ impl WindowsBackend {
                     self.emit_error(format!("Could not restore multi-output routing: {e}"));
                 }
             }
+        } else if let Some(engine) = &self.engine {
+            // Windows moved the default endpoint under a healthy fan-out
+            // (user via Sound settings, or a hotplug auto-promotion). If the
+            // new default is one of the enabled devices, adopt it as primary
+            // so the mirrored source is the endpoint actually receiving
+            // system audio. A default outside the enabled set is the user
+            // deliberately routing around the app — leave it alone.
+            let default = default_endpoint_id(enumerator);
+            if let Some(default) = default {
+                if default != engine.primary() && self.enabled.contains(&default) {
+                    info!("default endpoint moved to enabled device {default}; re-anchoring fan-out");
+                    let ids = self.enabled.clone();
+                    if let Err(e) = self.apply_enabled(&ids) {
+                        warn!("re-anchoring fan-out on new default failed: {e:#}");
+                    }
+                }
+            }
         }
         if self.desired_silent {
             if let Err(e) = self.enforce_silent_mode(enumerator) {
                 warn!("silent mode re-enforcement failed: {e:#}");
             }
         }
+    }
+
+    /// Arrange for a DevicesChanged nudge shortly after the restart cooldown
+    /// expires, so a rebuild deferred by the cooldown is actually retried.
+    /// The dying stream fires its DevicesChanged exactly once; when that
+    /// event lands inside the cooldown, nothing else would ever re-run
+    /// `reconcile_routing`. At most one nudge is pending at a time.
+    fn schedule_restart_nudge(&self) {
+        let Some(tx) = self.tx.clone() else {
+            return; // no pump listening; nothing could react anyway
+        };
+        if self.restart_nudge_pending.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let pending = Arc::clone(&self.restart_nudge_pending);
+        let wait = self
+            .last_engine_restart
+            .map(|t| ENGINE_RESTART_COOLDOWN.saturating_sub(t.elapsed()))
+            .unwrap_or(ENGINE_RESTART_COOLDOWN)
+            + Duration::from_millis(100);
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
+            pending.store(false, Ordering::SeqCst);
+            let _ = tx.send(BackendEvent::DevicesChanged);
+        });
     }
 
     /// Undo our silent-mode mute, if any. Degrades to a log entry when the
@@ -655,6 +850,10 @@ impl AudioBackend for WindowsBackend {
         let endpoints = enumerate_endpoints(&enumerator)?;
         let mut devices = Vec::with_capacity(endpoints.len());
         for (device, id) in &endpoints {
+            if device_is_handsfree(device, id) {
+                debug!("hiding Hands-Free telephony endpoint {id}");
+                continue;
+            }
             match read_device(device, id, &self.enabled) {
                 Ok(d) => devices.push(d),
                 Err(e) => warn!("skipping endpoint {id}: {e:#}"),
@@ -675,10 +874,16 @@ impl AudioBackend for WindowsBackend {
         ensure_com();
         let enumerator = create_enumerator()?;
         let active = enumerate_endpoints(&enumerator)?;
-        // Ids that no longer exist are ignored per the trait contract.
+        // Ids that no longer exist are ignored per the trait contract;
+        // Hands-Free telephony endpoints are never routed to (they are
+        // hidden from the list, but a stale id could still name one).
         let ids: Vec<String> = ids
             .iter()
-            .filter(|id| active.iter().any(|(_, a)| a == *id))
+            .filter(|id| {
+                active
+                    .iter()
+                    .any(|(device, a)| a == *id && !device_is_handsfree(device, a))
+            })
             .cloned()
             .collect();
         self.enabled = ids.clone();
@@ -784,16 +989,63 @@ impl AudioBackend for WindowsBackend {
 mod tests {
     use super::*;
 
+    fn transport(
+        enumerator: Option<&str>,
+        bus_path: Option<&str>,
+        adapter: Option<&str>,
+    ) -> TransportInfo {
+        TransportInfo {
+            enumerator: enumerator.map(str::to_string),
+            bus_path: bus_path.map(str::to_string),
+            adapter: adapter.map(str::to_string),
+        }
+    }
+
+    fn enum_only(enumerator: &str) -> TransportInfo {
+        transport(Some(enumerator), None, None)
+    }
+
     #[test]
     fn bluetooth_bus_beats_headphones_form_factor() {
         // BT headsets report the Headphones/Headset form factor; the
         // transport must win (see infer_device_type's priority order).
         assert_eq!(
-            infer_device_type("WH-1000XM5", Some(FF_HEADPHONES.0 as u32), Some("BTHENUM")),
+            infer_device_type("WH-1000XM5", Some(FF_HEADPHONES.0 as u32), &enum_only("BTHENUM")),
             DeviceType::Bluetooth
         );
         assert_eq!(
-            infer_device_type("Buds Pro", Some(FF_HEADSET.0 as u32), Some("bthenum")),
+            infer_device_type("Buds Pro", Some(FF_HEADSET.0 as u32), &enum_only("bthenum")),
+            DeviceType::Bluetooth
+        );
+    }
+
+    #[test]
+    fn offloaded_bluetooth_is_detected_without_a_bthenum_enumerator() {
+        // Real hardware (Intel SST offload): the endpoint's enumerator is the
+        // platform audio driver, and only the adapter name / bus path still
+        // say Bluetooth. Values below are verbatim from a WH-1000XM5.
+        assert_eq!(
+            infer_device_type(
+                "Headphones (WH-1000XM5)",
+                Some(FF_HEADPHONES.0 as u32),
+                &transport(
+                    Some("INTELAUDIO"),
+                    None,
+                    Some("Intel® Smart Sound Technology for Bluetooth® Audio"),
+                ),
+            ),
+            DeviceType::Bluetooth
+        );
+        assert_eq!(
+            infer_device_type(
+                "Headphones (WH-1000XM5)",
+                Some(FF_HEADPHONES.0 as u32),
+                &transport(
+                    Some("INTELAUDIO"),
+                    Some("{1}.BTHENUM\\{0000110B-0000-1000-8000-00805F9B34FB}_VID&0002054C_PID&0DF0\\7&105BD535&0&AC800ADBDAF3_C00000000"),
+                    None,
+                ),
+            ),
             DeviceType::Bluetooth
         );
     }
@@ -801,11 +1053,11 @@ mod tests {
     #[test]
     fn bluetooth_name_keywords_win_without_bus_info() {
         assert_eq!(
-            infer_device_type("Bluetooth Speaker", Some(FF_HDMI.0 as u32), None),
+            infer_device_type("Bluetooth Speaker", Some(FF_HDMI.0 as u32), &transport(None, None, None)),
             DeviceType::Bluetooth
         );
         assert_eq!(
-            infer_device_type("BT-900 Stereo", None, None),
+            infer_device_type("BT-900 Stereo", None, &transport(None, None, None)),
             DeviceType::Bluetooth
         );
     }
@@ -813,11 +1065,11 @@ mod tests {
     #[test]
     fn headphones_and_headset_form_factors_map_to_headphones() {
         assert_eq!(
-            infer_device_type("Realtek Audio", Some(FF_HEADPHONES.0 as u32), None),
+            infer_device_type("Realtek Audio", Some(FF_HEADPHONES.0 as u32), &transport(None, None, None)),
             DeviceType::Headphones
         );
         assert_eq!(
-            infer_device_type("Realtek Audio", Some(FF_HEADSET.0 as u32), None),
+            infer_device_type("Realtek Audio", Some(FF_HEADSET.0 as u32), &transport(None, None, None)),
             DeviceType::Headphones
         );
     }
@@ -827,7 +1079,7 @@ mod tests {
         // A USB headset is headphones to the user; USB is only a fallback
         // for endpoints whose form factor says nothing more specific.
         assert_eq!(
-            infer_device_type("USB Gaming Headset", Some(FF_HEADSET.0 as u32), Some("USB")),
+            infer_device_type("USB Gaming Headset", Some(FF_HEADSET.0 as u32), &enum_only("USB")),
             DeviceType::Headphones
         );
     }
@@ -835,27 +1087,31 @@ mod tests {
     #[test]
     fn hdmi_and_spdif_form_factors_map_to_hdmi_and_digital() {
         assert_eq!(
-            infer_device_type("LG TV", Some(FF_HDMI.0 as u32), None),
+            infer_device_type("LG TV", Some(FF_HDMI.0 as u32), &transport(None, None, None)),
             DeviceType::Hdmi
         );
         assert_eq!(
-            infer_device_type("Optical Out", Some(FF_SPDIF.0 as u32), None),
+            infer_device_type("Optical Out", Some(FF_SPDIF.0 as u32), &transport(None, None, None)),
             DeviceType::Digital
         );
     }
 
     #[test]
-    fn usb_bus_or_name_keyword_is_the_fallback_transport() {
+    fn usb_bus_adapter_or_name_keyword_is_the_fallback_transport() {
         assert_eq!(
-            infer_device_type("Scarlett 2i2", None, Some("USB")),
+            infer_device_type("Scarlett 2i2", None, &enum_only("USB")),
             DeviceType::Usb
         );
         assert_eq!(
-            infer_device_type("Scarlett 2i2", None, Some("usb")),
+            infer_device_type("Scarlett 2i2", None, &enum_only("usb")),
             DeviceType::Usb
         );
         assert_eq!(
-            infer_device_type("Generic USB DAC", None, None),
+            infer_device_type("Scarlett 2i2", None, &transport(None, None, Some("USB Audio Device"))),
+            DeviceType::Usb
+        );
+        assert_eq!(
+            infer_device_type("Generic USB DAC", None, &transport(None, None, None)),
             DeviceType::Usb
         );
     }
@@ -863,13 +1119,76 @@ mod tests {
     #[test]
     fn unknown_everything_defaults_to_speakers() {
         assert_eq!(
-            infer_device_type("Realtek High Definition Audio", None, None),
+            infer_device_type("Realtek High Definition Audio", None, &transport(None, None, None)),
             DeviceType::Speakers
         );
         // An unrecognized form factor on a non-USB/BT bus falls through too.
         assert_eq!(
-            infer_device_type("Mystery Endpoint", Some(9999), Some("HDAUDIO")),
+            infer_device_type("Mystery Endpoint", Some(9999), &enum_only("HDAUDIO")),
             DeviceType::Speakers
         );
+    }
+
+    #[test]
+    fn handsfree_detected_by_service_uuid_on_offload_stacks() {
+        // Verbatim bus path of a WH-1000XM5 Hands-Free endpoint on Intel SST:
+        // 0000111e is the Bluetooth Hands-Free service class.
+        let hfp = transport(
+            Some("INTELAUDIO"),
+            Some("{1}.BTHENUM\\{0000111E-0000-1000-8000-00805F9B34FB}_HCIBYPASS_VID&0002054C_PID&0DF0\\7&105BD535&0&AC800ADBDAF3_C00000000"),
+            Some("Intel® Smart Sound Technology for Bluetooth® Audio"),
+        );
+        assert!(is_handsfree_endpoint(
+            "Headset (WH-1000XM5 Hands-Free)",
+            Some(FF_HEADSET.0 as u32),
+            &hfp
+        ));
+        // The same headset's A2DP endpoint (service 0000110b) must stay.
+        let a2dp = transport(
+            Some("INTELAUDIO"),
+            Some("{1}.BTHENUM\\{0000110B-0000-1000-8000-00805F9B34FB}_VID&0002054C_PID&0DF0\\7&105BD535&0&AC800ADBDAF3_C00000000"),
+            Some("Intel® Smart Sound Technology for Bluetooth® Audio"),
+        );
+        assert!(!is_handsfree_endpoint(
+            "Headphones (WH-1000XM5)",
+            Some(FF_HEADPHONES.0 as u32),
+            &a2dp
+        ));
+    }
+
+    #[test]
+    fn handsfree_detected_by_bthhfenum_on_the_classic_stack() {
+        assert!(is_handsfree_endpoint(
+            "Headset (WH-1000XM5 Hands-Free AG Audio)",
+            Some(FF_HEADSET.0 as u32),
+            &enum_only("BTHHFENUM")
+        ));
+        assert!(!is_handsfree_endpoint(
+            "Headphones (WH-1000XM5 Stereo)",
+            Some(FF_HEADPHONES.0 as u32),
+            &enum_only("BTHENUM")
+        ));
+    }
+
+    #[test]
+    fn handsfree_name_fallback_requires_the_headset_form_factor() {
+        let none = transport(None, None, None);
+        assert!(is_handsfree_endpoint(
+            "Headset (Buds Hands-Free)",
+            Some(FF_HEADSET.0 as u32),
+            &none
+        ));
+        // Name alone must not hide a device with a different form factor...
+        assert!(!is_handsfree_endpoint(
+            "Hands-Free Sounding Speakers",
+            Some(1),
+            &none
+        ));
+        // ...and an ordinary headset without HFP markers must stay visible.
+        assert!(!is_handsfree_endpoint(
+            "USB Gaming Headset",
+            Some(FF_HEADSET.0 as u32),
+            &none
+        ));
     }
 }
