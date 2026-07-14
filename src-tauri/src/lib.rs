@@ -1,3 +1,28 @@
+//! Tauri shell around `sound_multiplexer_audio`: IPC commands, app state,
+//! and the event pipeline to the UI.
+//!
+//! # Command design
+//!
+//! Every `#[tauri::command]` is `async` so it runs on the Tauri async
+//! runtime instead of the main/UI thread — any backend call may shell out
+//! (pactl) or block on the backend mutex behind the event pump. Each command
+//! is a thin wrapper over a `*_inner` function that takes plain
+//! `&Mutex<...>` / `&Sender<...>` parameters, so the logic is unit-testable
+//! against a mock backend without a running Tauri app.
+//!
+//! # Single-emitter invariant
+//!
+//! `event_pump` is the ONLY place that emits `devices-changed` to the UI.
+//! It is a single thread, so its full-state pushes are totally ordered.
+//! Mutating commands therefore return `()` and nudge the pump via `notify`
+//! instead of returning fresh state: a slow command response arriving after
+//! a newer event could otherwise roll the UI back to stale state. For the
+//! same reason, do not add a second channel that carries device state —
+//! ordering across two channels is undefined. The only device lists returned
+//! as command results are `get_devices` / `refresh_devices` (initial load
+//! and the explicit Refresh button, where the UI itself asked and awaits
+//! exactly one response).
+
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
@@ -199,6 +224,8 @@ fn event_pump(app: AppHandle, rx: mpsc::Receiver<BackendEvent>) {
     }
 }
 
+/// Build and run the Tauri app. Blocks until exit; backend cleanup (routing
+/// teardown) runs on the `RunEvent::Exit` path.
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 

@@ -65,6 +65,9 @@ impl Ring {
         self.buf.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Append captured bytes. Occupancy above the max is clamped back to the
+    /// target by dropping the oldest whole frames: bounded latency is worth
+    /// an audible glitch.
     pub fn push(&self, data: &[u8]) {
         let mut buf = self.lock();
         buf.extend(data);

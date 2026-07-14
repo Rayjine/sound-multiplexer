@@ -48,6 +48,8 @@ const PA_INVALID_INDEX: u64 = 4_294_967_295;
 /// Minimum spacing between full re-enumerations in the monitor thread.
 const REENUM_MIN_INTERVAL: Duration = Duration::from_millis(200);
 
+/// PulseAudio/PipeWire backend; see the module docs for the routing scheme
+/// and pactl conventions.
 pub struct LinuxBackend {
     /// Sink names the user enabled, as last applied.
     enabled: HashSet<String>,
@@ -60,6 +62,9 @@ pub struct LinuxBackend {
 }
 
 impl LinuxBackend {
+    /// Fails fast when the sound server is unreachable. Reconciles leftover
+    /// modules of previous runs, then seeds the enabled set from the current
+    /// default sink.
     pub fn new() -> anyhow::Result<Self> {
         run_pactl(&["info"]).context("cannot reach the PulseAudio/PipeWire sound server")?;
 
@@ -825,6 +830,9 @@ fn is_sink_or_server_event(line: &str) -> bool {
     line.contains(" on sink #") || line.contains(" on server")
 }
 
+/// Turn `pactl subscribe` lines into [`BackendEvent`]s by re-enumerating and
+/// diffing snapshots. Exits on child EOF/pipe error (how `stop_monitor`
+/// bounds its join) or when the receiver is gone.
 fn monitor_loop(stdout: ChildStdout, tx: Sender<BackendEvent>) {
     let mut reader = BufReader::new(stdout);
     let mut snapshot = take_snapshot().ok();

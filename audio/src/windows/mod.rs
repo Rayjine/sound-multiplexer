@@ -54,6 +54,7 @@ use crate::{AudioBackend, BackendEvent, Device, DeviceType};
 // COM lifecycle
 // ---------------------------------------------------------------------------
 
+/// Per-thread COM initialization, balanced on thread exit (see `ensure_com`).
 struct ComGuard {
     uninit_on_drop: bool,
 }
@@ -290,6 +291,8 @@ fn set_default_endpoint(id: &str) -> anyhow::Result<()> {
     let policy: IPolicyConfig = unsafe { CoCreateInstance(&POLICY_CONFIG_CLSID, None, CLSCTX_ALL) }
         .context("create PolicyConfig client")?;
     let wide = to_wide(id);
+    // Both roles ordinary apps follow; eCommunications is deliberately left
+    // alone so voice apps keep their chosen device.
     for role in [eConsole, eMultimedia] {
         unsafe { policy.set_default_endpoint(PCWSTR(wide.as_ptr()), role) }
             .ok()
@@ -485,6 +488,9 @@ impl Drop for Monitor {
 /// so a persistently failing device cannot drive a restart loop.
 const ENGINE_RESTART_COOLDOWN: Duration = Duration::from_secs(2);
 
+/// WASAPI backend; see the module docs for the routing scheme and COM
+/// threading rules. Compiles and is unit-tested, but has never run on real
+/// hardware (see the crate docs on platform coverage).
 pub struct WindowsBackend {
     /// Currently applied enabled set (endpoint IDs).
     enabled: Vec<String>,
@@ -503,6 +509,8 @@ pub struct WindowsBackend {
 }
 
 impl WindowsBackend {
+    /// Backend seeded with the current default render endpoint as the
+    /// initially enabled device.
     pub fn new() -> anyhow::Result<Self> {
         ensure_com();
         let enumerator = create_enumerator()?;

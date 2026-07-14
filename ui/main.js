@@ -1,9 +1,38 @@
+/* Sound Multiplexer UI. Framework-free, no build step: index.html + this
+   file + styles.css are loaded as-is by the Tauri webview.
+
+   State flow — one source of truth:
+   - The backend's full device list is the only authoritative state; it
+     arrives via the `devices-changed` event and the get/refresh commands.
+     Mutation commands (set_*) return nothing — their effect comes back as
+     the next `devices-changed`.
+   - Handlers apply mutations optimistically for instant feedback, then
+     invoke the command; on rejection revertOnError() refetches, so the UI
+     never keeps showing routing the backend refused.
+
+   Rendering:
+   - Keyed rows (`rows`: id -> <li>) updated in place; reordering moves only
+     misplaced nodes. Re-appending an already-placed node would blur focus
+     and kill an in-progress slider drag, and the backend emits
+     devices-changed bursts during routing changes.
+   - `draggingId` shields the slider being dragged from incoming volume
+     writes, which lag behind the local drag position.
+
+   Master row: while 2+ devices are enabled the backend prepends a synthetic
+   `deviceType: 'master'` device (the combine sink itself). It renders like
+   any row, but realDevices() excludes it from the status count and the
+   empty check, and CSS hides its enable switch ([data-master="true"]).
+
+   Volume and mute stay adjustable on disabled rows: they set the device's
+   stored level/mute without touching routing.
+
+   Without window.__TAURI__ (plain browser, jsdom) an in-memory mock backend
+   activates, so the UI can be previewed standalone and DOM-tested
+   (ui-tests/ drives both the mock and a fake __TAURI__). */
 (function () {
   'use strict';
 
-  /* ================= IPC layer =================
-     Real backend via Tauri IPC; falls back to an in-memory mock when
-     opened in a plain browser so the UI can be previewed. */
+  /* ================= IPC layer ================= */
   var TAURI = window.__TAURI__ || null;
 
   var mockDevices = [
@@ -48,6 +77,7 @@
         },
         setVolume: function (id, volume) {
           mockDevices.forEach(function (d) { if (d.id === id) d.volume = volume; });
+          // No emit: an echoed devices-changed would fight the active drag.
           return Promise.resolve();
         },
         setMuted: function (id, muted) {
@@ -142,6 +172,8 @@
       api.setMuted(d.id, m).catch(revertOnError);
     });
 
+    // input = live drag: update locally, push over IPC at most every 80ms.
+    // change = drag end: clear the guard and push the final value unthrottled.
     var pushVolume = throttle(function (value) {
       api.setVolume(d.id, value / 100).catch(surfaceError);
     }, 80);
@@ -250,6 +282,8 @@
     render();
   }
 
+  /* ================= errors & refetch ================= */
+
   /* Flash an error in the status bar, then restore the derived status. */
   var errorFlashTimer = null;
   function surfaceError(err) {
@@ -281,6 +315,8 @@
     });
   }
 
+  /* Leading + trailing throttle; the trailing call fires with the latest
+     arg, so a burst never ends on a stale value. */
   function throttle(fn, ms) {
     var last = 0;
     var timer = null;
@@ -363,6 +399,8 @@
   applyTheme(savedTheme || 'system', false);
   if (savedSync === 'true') syncSw.setAttribute('aria-checked', 'true');
 
+  // Subscribe before the initial fetch so a change racing it is not missed;
+  // both paths carry full state, so whichever lands last wins harmlessly.
   api.onDevicesChanged(setDevices);
   api.onBackendError(surfaceError);
 

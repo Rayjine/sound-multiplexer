@@ -42,6 +42,8 @@ cargo test -p sound-multiplexer-audio --test linux_live -- --ignored
 (cd ui-tests && npm test)         # frontend tests (jsdom)
 ```
 
+The full technical reference — backend contracts, routing semantics, the Windows engine, testing strategy — lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). CI runs the whole suite on Linux (including the live E2E inside a PipeWire session) and Windows, and produces installer artifacts.
+
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE).
