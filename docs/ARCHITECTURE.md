@@ -134,27 +134,52 @@ then sweeps stragglers. Errors are collected, not short-circuited.
 
 Enumeration, volume and mute use the MMDevice API + `IAudioEndpointVolume`;
 change notifications use `IMMNotificationClient` and per-endpoint
-`IAudioEndpointVolumeCallback` registrations (refreshed on every enumeration
-so they follow hotplug). Every entry point calls `ensure_com()` — a
-thread-local MTA join — because calls arrive from arbitrary Tauri threads and
-COM callbacks arrive on MTA workers; all WASAPI/MMDevice objects are
-documented free-threaded, which is what makes the `Agile` Send wrapper sound.
-Our own volume/mute writes carry `APP_EVENT_CONTEXT` so the volume callback
-can drop the echo (loop prevention).
+`IAudioEndpointVolumeCallback` registrations, reconciled *incrementally*
+after every enumeration so they follow hotplug: existing registrations are
+kept, never torn down and re-created, because a change landing in an
+unregister/re-register window would be silently lost and enumeration runs on
+every pump cycle. Every entry point calls `ensure_com()` — a thread-local MTA
+join — because calls arrive from arbitrary Tauri threads and COM callbacks
+arrive on MTA workers; all WASAPI/MMDevice objects are documented
+free-threaded, which is what makes the `Agile` Send wrapper sound. Our own
+volume/mute writes carry `APP_EVENT_CONTEXT` so the volume callback can drop
+the echo (loop prevention).
+
+**Device classification and Hands-Free filtering.** Real hardware showed the
+endpoint's `PKEY_Device_EnumeratorName` is not enough to detect transports:
+on audio-offload stacks (Intel SST) a Bluetooth headset's endpoints enumerate
+as `INTELAUDIO`, not `BTHENUM`. `TransportInfo` therefore layers the
+enumerator name, the adapter interface name, and the undocumented-but-stable
+MMDevice bus-path property (`{b3f8fa53-...},39`), whose embedded Bluetooth
+service UUID also distinguishes A2DP (`0000110b`) from Hands-Free telephony
+(`0000111e`/`0000111f`). HFP endpoints are *excluded* from `list_devices`
+and from `apply_enabled`: they coexist with the same headset's A2DP endpoint,
+and opening a render stream on one flips the headset out of A2DP — "Select
+all" would otherwise collapse the headset to telephony-quality audio and
+invalidate its A2DP stream. One row per physical device also matches Linux,
+where HFP is a profile, not a separate sink.
 
 **Fan-out engine** (`engine.rs` + platform-neutral `fanout.rs`): the primary
 endpoint (kept as Windows default, so it has zero added latency) is
 loopback-captured (`AUDCLNT_STREAMFLAGS_LOOPBACK`), and one render thread per
-secondary drains a per-device `Ring`. Rings target 60 ms of buffered audio and
-clamp at 120 ms by dropping the oldest whole frames back to target — the whole
-drift strategy for v1 (`IAudioClockAdjustment` rate matching is the planned
-refinement). Render streams open with the *capture* mix format plus
+secondary drains a per-device `Ring`. Each render stream pre-fills its device
+buffer with 60 ms of silence (`FILL_TARGET_MS`) and then keeps the buffer
+topped up *to that level only*, writing just what the ring can supply — the
+device buffer itself is the jitter cushion, so a late capture packet lowers
+the cushion instead of splicing a silence gap into the stream, and the
+secondary lag stays ≈60 ms. Only when the cushion sags below 20 ms
+(`FILL_LOW_WATER_MS`) with an empty ring — startup, idle source, or the
+secondary's clock running fast — is it topped back up with silence in one
+splice. Drift in the other direction (slow secondary) grows the ring until
+the 120 ms clamp drops the oldest whole frames back to 60 ms. That is the
+whole drift strategy for v1; `IAudioClockAdjustment` rate matching is the
+planned refinement. Render streams open with the *capture* mix format plus
 `AUTOCONVERTPCM | SRC_DEFAULT_QUALITY`, so the OS converts per device and the
 engine never touches samples. Silence-flagged capture packets are pushed as
 zeros ("silence is data too") so secondaries stay in step instead of
-underrunning at random offsets; render underruns are zero-filled. The capture
-wait uses a 10 ms timeout because event-driven loopback is historically
-unreliable when the endpoint has no active render stream.
+underrunning at random offsets. The capture wait uses a 10 ms timeout because
+event-driven loopback is historically unreliable when the endpoint has no
+active render stream.
 
 **Failure isolation and self-healing.** A dying render stream takes down only
 itself; a capture failure stops the whole engine (`StreamCtx::fatal`). Either
@@ -163,7 +188,15 @@ way `fail_stream` raises the `failed` flag and emits `Error` +
 `WindowsBackend::list_devices` runs `reconcile_routing`, which rebuilds the
 engine against the surviving devices — at most once per 2 s
 (`ENGINE_RESTART_COOLDOWN`), so a persistently failing device cannot drive a
-restart loop.
+restart loop. A failure landing *inside* the cooldown would consume its only
+`DevicesChanged` (a dying stream fires exactly once), so deferral also
+schedules a one-shot nudge thread that re-sends `DevicesChanged` just after
+the cooldown expires — deferred means retried, never dropped. `reconcile_routing`
+also re-anchors a *healthy* fan-out when Windows moves the default endpoint
+onto another enabled device (Sound-settings change, hotplug auto-promotion):
+the new default becomes the loopback source, so the mirror keeps following
+what the system actually plays. A default moved *outside* the enabled set is
+the user deliberately routing around the app and is left alone.
 
 **`IPolicyConfig`.** Windows has no documented API to set the default
 endpoint. `IPolicyConfig` is the undocumented interface behind the Sound
@@ -179,11 +212,17 @@ takes ownership away and stops re-enforcement. `enforce_silent_mode` is keyed
 off present state, not transitions, so failed mutes are retried and the mute
 follows the default endpoint if Windows moves it while silent.
 
-**Honest limitations:** secondaries lag the primary by roughly the ring target
-(~60 ms) — accepted v1 behavior; loopback only sees the shared-mode mix, so
-exclusive-mode and DRM-protected streams are mirrored as silence; and the
-backend has **never run on real audio hardware** — CI compiles and unit-tests
-it on `windows-latest` (no audio devices), nothing more yet.
+**Honest limitations:** secondaries lag the primary by roughly the fill
+target (~60 ms) — accepted v1 behavior. Loopback only sees the shared-mode
+mix, so exclusive-mode and DRM-protected streams are mirrored as silence.
+Loopback also taps the mix *after* the endpoint's software volume and mute,
+so on endpoints without hardware volume (typical for Bluetooth and display
+audio, and confirmed on real hardware) the primary's volume slider scales —
+and its mute silences — every secondary too; a `QueryHardwareSupport`-gated
+inverse-gain compensation is the planned refinement. The backend has run on
+real hardware: an opt-in live E2E (`audio/tests/windows_live.rs`, below)
+passes against real endpoints, including a measured signal-level proof that
+the fan-out actually mirrors audio.
 
 ## Tauri layer (`src-tauri/src/lib.rs`)
 
@@ -257,6 +296,7 @@ dependency-free and directly loadable in jsdom for tests.
 | Rust unit tests | `cargo test --workspace` | pactl parsers, device-type heuristics, module matching, ring buffer/format math (`fanout.rs`, OS-free so it runs everywhere), Windows type inference, command logic against a `MockBackend` (notify-exactly-once, clamping, failure paths) |
 | Live smoke | `cargo test -p sound-multiplexer-audio -- --ignored` | `linux.rs::live_smoke`: loads/unloads a combine sink against the real server; never touches the default or any volume |
 | Live E2E | `cargo test -p sound-multiplexer-audio --test linux_live -- --ignored --nocapture` | full `LinuxBackend` lifecycle (below) |
+| Live E2E (Windows) | `cargo test -p sound-multiplexer-audio --test windows_live -- --ignored --nocapture` | full `WindowsBackend` lifecycle on real endpoints (below) |
 | Frontend | `cd ui-tests && npm install && npm test` | the real `index.html` + `main.js` in jsdom: rendering, keyed reconciliation (identity + minimal moves), interactions, exact IPC payloads, revert-on-error, master row, theming |
 
 The live E2E (`audio/tests/linux_live.rs`) exercises every routing transition
@@ -272,15 +312,27 @@ per-channel volumes and mute, and sweeps test modules even when an assertion
 panics mid-test. Machines with fewer than two sinks get helper null sinks
 named outside the app's prefix.
 
-CI (`.github/workflows/ci.yml`) runs all of the above. The Linux job adds the
-live E2E inside a `dbus-run-session` with a real PipeWire/pipewire-pulse/
-WirePlumber stack and two **synthetic null-sink devices** (`ci_dev_a`/`ci_dev_b`,
-named outside the app's prefix so the backend treats them as ordinary
-outputs), plus clippy for the host and a cross-check clippy for
-`x86_64-pc-windows-msvc`. The Windows job runs `cargo test --workspace` on
-`windows-latest` — currently the **only** exercise of the Windows code on its
-actual platform — and builds an unsigned NSIS installer artifact. A third job
-uploads deb/rpm/AppImage bundles.
+The Windows live E2E (`audio/tests/windows_live.rs`) mirrors the Linux one
+with independent plumbing (its own enumerator, endpoint-volume reads and
+`IPolicyConfig` declaration): device listing sanity, external-change
+monitoring, volume/mute writes, 1-device default switching (bogus ids
+ignored), 2+ fan-out, idempotent re-apply, silent mode in and out, and
+cleanup. Its fan-out check needs no listener: it plays a sine tone on the
+primary (the system default, exactly like any app) and loopback-captures a
+*secondary*, asserting signal energy that can only have arrived through the
+engine. An `AudioStateGuard` restores the default endpoint and every
+endpoint's volume/mute on `Drop`, even when an assertion panics. It requires
+real endpoints, so it is opt-in on real hardware, not part of CI.
+
+CI (`.github/workflows/ci.yml`) runs all of the above except the live E2Es.
+The Linux job adds its live E2E inside a `dbus-run-session` with a real
+PipeWire/pipewire-pulse/ WirePlumber stack and two **synthetic null-sink
+devices** (`ci_dev_a`/`ci_dev_b`, named outside the app's prefix so the
+backend treats them as ordinary outputs), plus clippy for the host and a
+cross-check clippy for `x86_64-pc-windows-msvc`. The Windows job runs
+`cargo test --workspace` on `windows-latest` (no audio devices there — the
+live E2E needs real hardware) and builds an unsigned NSIS installer artifact.
+A third job uploads deb/rpm/AppImage bundles.
 
 ## Roadmap
 

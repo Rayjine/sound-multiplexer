@@ -8,7 +8,7 @@ Select the devices you want sound on; the app builds a combined PulseAudio/PipeW
 
 ## Status
 
-The app is written in Rust with a Tauri UI. Linux is tested, including a live end-to-end suite that drives a real PipeWire server. The Windows build (WASAPI loopback fan-out) passes its tests in CI but hasn't run on real hardware yet. Installers for both — AppImage, deb, rpm and a Windows setup — are on the [releases page](https://github.com/Rayjine/sound-multiplexer/releases), or build from source below.
+The app is written in Rust with a Tauri UI. Linux is tested, including a live end-to-end suite that drives a real PipeWire server. The Windows backend (WASAPI loopback fan-out) has now been verified on real hardware too: a live end-to-end suite (`windows_live`) exercises the full routing lifecycle against real endpoints, including a measured proof that the fan-out mirrors audio. One known Windows limitation: while several devices are active, the volume and mute of the *primary* device (the Windows default) also scale every other active device on most hardware — see the [architecture notes](docs/ARCHITECTURE.md). Installers for both — AppImage, deb, rpm and a Windows setup — are on the [releases page](https://github.com/Rayjine/sound-multiplexer/releases), or build from source below.
 
 ## Build from source
 
@@ -41,6 +41,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p sound-multiplexer-audio --test linux_live -- --ignored
                                   # live end-to-end against your audio server
                                   # (briefly reroutes audio, restores everything)
+cargo test -p sound-multiplexer-audio --test windows_live -- --ignored
+                                  # Windows equivalent: real endpoints, plays a
+                                  # short quiet tone to prove the fan-out mirrors
 (cd ui-tests && npm test)         # frontend tests (jsdom)
 ```
 
