@@ -70,9 +70,15 @@ jobs:
             pactl info
             pactl load-module module-null-sink sink_name=ci_dev_a "sink_properties=device.description=CI-Device-A"
             pactl load-module module-null-sink sink_name=ci_dev_b "sink_properties=device.description=CI-Device-B"
-            # set-default-sink needs WirePlumber (it owns the default metadata),
-            # which may still be starting even though pipewire-pulse answers.
-            for _ in $(seq 1 60); do pactl set-default-sink ci_dev_a 2>/dev/null && break; sleep 0.5; done
+            # set-default-sink needs WirePlumber (it owns the default metadata)
+            # and is applied asynchronously — keep nudging until the readback
+            # agrees, which doubles as the session-ready barrier for the tests.
+            for _ in $(seq 1 60); do
+              pactl set-default-sink ci_dev_a 2>/dev/null || true
+              test "$(pactl get-default-sink 2>/dev/null)" = ci_dev_a && break
+              sleep 0.5
+            done
+            echo "default sink now: $(pactl get-default-sink)"
             test "$(pactl get-default-sink)" = ci_dev_a
             cargo test -p sound-multiplexer-audio --test linux_live -- --ignored --nocapture
           '
