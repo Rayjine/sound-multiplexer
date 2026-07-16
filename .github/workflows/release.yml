@@ -84,6 +84,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: assets
@@ -92,14 +94,19 @@ jobs:
       # Draft first, publish last: the release only becomes /releases/latest
       # (which the website's download buttons read) once every asset is on it.
       # view/--clobber/edit make a re-run after a partial failure safe.
+      # Notes come from .github/releases/<tag>.md when the release ships with
+      # hand-written notes; otherwise GitHub generates them from the commits.
       - name: Create GitHub Release with installers
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+          notes=".github/releases/$GITHUB_REF_NAME.md"
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || {
+            if [ -f "$notes" ]; then notes_args=(--notes-file "$notes"); else notes_args=(--generate-notes); fi
             gh release create "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Sound Multiplexer $GITHUB_REF_NAME" \
-              --generate-notes --draft
+              "${notes_args[@]}" --draft
+          }
           find assets -type f -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
