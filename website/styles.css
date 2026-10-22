@@ -294,3 +294,19 @@ h1, h2 { line-height: 1.2; margin: 0 0 0.5em; }
   .hero { grid-template-columns: 1fr; gap: 40px; padding-top: 48px; padding-bottom: 48px; }
   .features { grid-template-columns: 1fr; }
 }
+
+/* Keyboard navigation and forgiving touch areas for the interactive demo. */
+.skip-link { position: absolute; z-index: 20; top: 8px; left: 12px; padding: 12px 18px; color: var(--text); background: var(--card); transform: translateY(-160%); }
+.skip-link:focus { transform: translateY(0); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.top-link, .foot-links a { display: inline-flex; align-items: center; min-height: 44px; }
+@media (pointer: coarse), (max-width: 760px) {
+  .aw-mute { width: 44px; height: 44px; }
+  .aw-switch::before { content: ''; position: absolute; inset: -11px -2px; }
+  .aw-track::before { inset-block: -19px; }
+  .aw-device { padding-block: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
