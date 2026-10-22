@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: tuesday
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    groups:
+      cargo-patch-and-minor:
+        applies-to: version-updates
+        update-types: [patch, minor]
+
+  - package-ecosystem: npm
+    directory: "/website"
+    schedule:
+      interval: weekly
+      day: tuesday
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    groups:
+      website-npm-patch-and-minor:
+        applies-to: version-updates
+        update-types: [patch, minor]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: tuesday
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    groups:
+      actions-patch-and-minor:
+        applies-to: version-updates
+        update-types: [patch, minor]
