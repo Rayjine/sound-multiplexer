@@ -44,7 +44,7 @@ jobs:
       - name: Clippy (Windows code, cross-check)
         run: cargo clippy -p sound-multiplexer-audio --all-targets --target x86_64-pc-windows-msvc -- -D warnings
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
