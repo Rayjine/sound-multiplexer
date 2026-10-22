@@ -1,0 +1,14 @@
+{
+  "name": "sound-multiplexer-website-tests",
+  "version": "0.0.0",
+  "description": "Browser tests for the Sound Multiplexer static website",
+  "scripts": {
+    "test": "playwright test",
+    "test:published": "playwright test --grep @published"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  },
+  "private": true
+}

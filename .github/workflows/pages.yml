@@ -2,6 +2,8 @@
 name: Deploy website
 
 on:
+  pull_request:
+    paths: ['website/**', '.github/workflows/pages.yml']
   push:
     branches: [main]
     paths: ['website/**', '.github/workflows/pages.yml']
@@ -9,28 +11,94 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
+  website-checks:
+    name: Website browser tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install website test dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+
+      - name: Test website interactions and responsive layout
+        working-directory: website
+        run: npm test
+
   deploy:
+    needs: website-checks
+    if: github.event_name != 'pull_request'
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/configure-pages@v5
 
+      - name: Stage only the public website files
+        run: |
+          mkdir -p /tmp/sound-multiplexer-pages
+          cp website/index.html website/styles.css website/site.js website/icon.png /tmp/sound-multiplexer-pages/
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: website
+          path: /tmp/sound-multiplexer-pages
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  published-smoke:
+    needs: deploy
+    name: Verify deployed website
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install website test dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+
+      - name: Check live Pages response and interactive demo
+        working-directory: website
+        env:
+          SITE_URL: ${{ needs.deploy.outputs.page_url }}
+        run: npm run test:published

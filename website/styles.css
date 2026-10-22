@@ -73,6 +73,7 @@ body {
 }
 a { color: var(--accent); }
 a:hover { color: var(--accent-hover); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 h1, h2 { line-height: 1.2; margin: 0 0 0.5em; }
 .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
 .chip {
