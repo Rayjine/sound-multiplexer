@@ -67,7 +67,7 @@ jobs:
           mkdir -p /tmp/sound-multiplexer-pages
           cp website/index.html website/styles.css website/site.js website/icon.png /tmp/sound-multiplexer-pages/
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: /tmp/sound-multiplexer-pages
 
