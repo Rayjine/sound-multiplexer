@@ -11,6 +11,14 @@ const release = {
   ],
 };
 
+async function tabTo(page, locator, maxTabs = 40) {
+  for (let tab = 0; tab < maxTabs; tab += 1) {
+    await page.keyboard.press('Tab');
+    if (await locator.evaluate((element) => element === document.activeElement)) return;
+  }
+  throw new Error(`Keyboard tab order did not reach ${await locator.getAttribute('href')}`);
+}
+
 test.beforeEach(async ({ page }) => {
   // The release request is the only API call; keep it deterministic and local.
   await page.route(releaseApi, (route) => route.fulfill({ json: release }));
@@ -91,11 +99,12 @@ test('mobile layout at 360px keeps metadata, focus and download actions reachabl
   expect(widths.content).toBeLessThanOrEqual(widths.viewport);
 
   const sourceLink = page.getByRole('link', { name: 'GitHub', exact: true });
-  await page.keyboard.press('Tab');
+  await tabTo(page, sourceLink);
   await expect(sourceLink).toBeFocused();
-  await sourceLink.press('Tab');
-  const download = page.getByRole('link', { name: /Download/ }).first();
+  const download = page.locator('.dl-card').first();
+  await tabTo(page, download);
   await expect(download).toBeFocused();
+  expect(await download.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe('none');
 });
 
 test('@published smoke: deployed page serves CSS and interactive demo', async ({ page }) => {
