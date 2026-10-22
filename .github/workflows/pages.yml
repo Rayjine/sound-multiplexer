@@ -12,10 +12,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 jobs:
   website-checks:
     name: Website browser tests
@@ -48,6 +44,9 @@ jobs:
     if: github.event_name != 'pull_request'
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
+    concurrency:
+      group: pages-production
+      cancel-in-progress: false
     permissions:
       contents: read
       pages: write
